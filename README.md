@@ -1,10 +1,10 @@
 # redis-otp-manager
 
-Lightweight, Redis-backed OTP manager for Node.js apps.
+Lightweight, Redis-backed OTP manager for Node.js and NestJS apps.
 
-## Current MVP
+## Current Features
 
-This first implementation includes:
+This package currently includes:
 - OTP generation
 - OTP verification
 - SHA-256 OTP hashing
@@ -13,11 +13,18 @@ This first implementation includes:
 - Intent-aware key strategy
 - Rate limiting
 - Max-attempt protection
+- NestJS module integration via `redis-otp-manager/nest`
 
 ## Install
 
 ```bash
 npm install redis-otp-manager
+```
+
+For NestJS apps, also install the Nest peer dependencies used by your app:
+
+```bash
+npm install @nestjs/common @nestjs/core reflect-metadata rxjs
 ```
 
 ## Quality Checks
@@ -56,6 +63,62 @@ await otp.verify({
   intent: "login",
   otp: generated.otp ?? "123456",
 });
+```
+
+## NestJS
+
+Import the Nest integration from the dedicated subpath so non-Nest users do not pull Nest dependencies.
+
+```ts
+import { Module } from "@nestjs/common";
+import { createClient } from "redis";
+import { OTPManager, RedisAdapter } from "redis-otp-manager";
+import { OTPModule, InjectOTPManager } from "redis-otp-manager/nest";
+
+const redisClient = createClient({ url: process.env.REDIS_URL });
+
+@Module({
+  imports: [
+    OTPModule.forRoot({
+      store: new RedisAdapter(redisClient),
+      ttl: 300,
+      maxAttempts: 5,
+      rateLimit: {
+        window: 60,
+        max: 3,
+      },
+      isGlobal: true,
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+Async setup is also supported:
+
+```ts
+OTPModule.forRootAsync({
+  isGlobal: true,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => ({
+    store: new RedisAdapter(createClient({ url: config.getOrThrow("REDIS_URL") })),
+    ttl: 300,
+    maxAttempts: 5,
+  }),
+});
+```
+
+Inject in services:
+
+```ts
+import { Injectable } from "@nestjs/common";
+import { OTPManager } from "redis-otp-manager";
+import { InjectOTPManager } from "redis-otp-manager/nest";
+
+@Injectable()
+export class AuthService {
+  constructor(@InjectOTPManager() private readonly otpManager: OTPManager) {}
+}
 ```
 
 ## API
@@ -123,10 +186,24 @@ attempts:{intent}:{type}:{identifier}
 rate:{type}:{identifier}
 ```
 
+## Release Automation
+
+Publishing on every `main` merge is not recommended for npm packages because npm versions are immutable. The safer setup is:
+- merge to `main` runs CI only
+- publish happens when you push a version tag like `v0.2.0`
+
+Required GitHub secrets:
+- `NPM_TOKEN`
+
+Tag-based publish:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
 ## Next Roadmap
 
-- NestJS module and decorator
-- alphanumeric tokens
+- token/email helpers
 - hooks/events
-- email token helpers
-
+- analytics and observability
