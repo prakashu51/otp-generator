@@ -23,6 +23,8 @@ export class OTPManager {
     Omit<OTPManagerOptions, "ttl" | "maxAttempts">;
 
   constructor(options: OTPManagerOptions) {
+    validateManagerOptions(options);
+
     this.options = {
       ...options,
       otpLength: options.otpLength ?? 6,
@@ -31,6 +33,8 @@ export class OTPManager {
   }
 
   async generate(input: GenerateOTPInput): Promise<GenerateOTPResult> {
+    validatePayload(input);
+
     const otpKey = buildOtpKey(input);
     const attemptsKey = buildAttemptsKey(input);
     const rateLimitKey = buildRateLimitKey(input);
@@ -50,6 +54,12 @@ export class OTPManager {
   }
 
   async verify(input: VerifyOTPInput): Promise<true> {
+    validatePayload(input);
+
+    if (!input.otp || !input.otp.trim()) {
+      throw new TypeError("OTP must be a non-empty string.");
+    }
+
     const otpKey = buildOtpKey(input);
     const attemptsKey = buildAttemptsKey(input);
 
@@ -77,5 +87,42 @@ export class OTPManager {
     await this.options.store.del(attemptsKey);
 
     return true;
+  }
+}
+
+function validateManagerOptions(options: OTPManagerOptions): void {
+  if (!Number.isInteger(options.ttl) || options.ttl <= 0) {
+    throw new TypeError("ttl must be a positive integer.");
+  }
+
+  if (!Number.isInteger(options.maxAttempts) || options.maxAttempts <= 0) {
+    throw new TypeError("maxAttempts must be a positive integer.");
+  }
+
+  if (
+    options.otpLength !== undefined &&
+    (!Number.isInteger(options.otpLength) || options.otpLength <= 0)
+  ) {
+    throw new TypeError("otpLength must be a positive integer when provided.");
+  }
+
+  if (options.rateLimit) {
+    if (!Number.isInteger(options.rateLimit.window) || options.rateLimit.window <= 0) {
+      throw new TypeError("rateLimit.window must be a positive integer.");
+    }
+
+    if (!Number.isInteger(options.rateLimit.max) || options.rateLimit.max <= 0) {
+      throw new TypeError("rateLimit.max must be a positive integer.");
+    }
+  }
+}
+
+function validatePayload(input: GenerateOTPInput | VerifyOTPInput): void {
+  if (!input.type || !input.type.trim()) {
+    throw new TypeError("type must be a non-empty string.");
+  }
+
+  if (!input.identifier || !input.identifier.trim()) {
+    throw new TypeError("identifier must be a non-empty string.");
   }
 }

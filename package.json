@@ -2,6 +2,14 @@
   "name": "otp-manager",
   "version": "0.1.0",
   "description": "Lightweight, Redis-backed OTP manager for Node.js apps",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:prakashu51/otp-generator.git"
+  },
+  "homepage": "https://github.com/prakashu51/otp-generator#readme",
+  "bugs": {
+    "url": "https://github.com/prakashu51/otp-generator/issues"
+  },
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +26,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "tsx --test test/**/*.test.ts",
+    "check": "npm run build && npm run test",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "otp",

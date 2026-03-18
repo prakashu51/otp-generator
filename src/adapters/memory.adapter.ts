@@ -35,10 +35,19 @@ export class MemoryAdapter implements StoreAdapter {
   }
 
   async increment(key: string, ttlSeconds: number): Promise<number> {
-    const current = await this.get(key);
-    const nextValue = (current ? Number(current) : 0) + 1;
+    const currentRecord = this.storage.get(key);
 
-    await this.set(key, String(nextValue), ttlSeconds);
+    if (!currentRecord || currentRecord.expiresAt <= Date.now()) {
+      await this.set(key, "1", ttlSeconds);
+      return 1;
+    }
+
+    const nextValue = Number(currentRecord.value) + 1;
+
+    this.storage.set(key, {
+      value: String(nextValue),
+      expiresAt: currentRecord.expiresAt,
+    });
 
     return nextValue;
   }

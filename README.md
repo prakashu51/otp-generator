@@ -20,6 +20,12 @@ This first implementation includes:
 npm install otp-manager
 ```
 
+## Quality Checks
+
+```bash
+npm run check
+```
+
 ## Quick Start
 
 ```ts

@@ -130,3 +130,26 @@ test("enforces rate limiting on OTP generation", async () => {
     OTPRateLimitExceededError,
   );
 });
+
+test("throws when required payload fields are missing", async () => {
+  const manager = createManager();
+
+  await assert.rejects(
+    manager.generate({
+      type: "",
+      identifier: "user@example.com",
+      intent: "login",
+    }),
+    TypeError,
+  );
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "",
+    }),
+    TypeError,
+  );
+});
