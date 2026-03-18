@@ -1,5 +1,5 @@
 {
-  "name": "otp-manager",
+  "name": "redis-otp-manager",
   "version": "0.1.0",
   "description": "Lightweight, Redis-backed OTP manager for Node.js apps",
   "repository": {
@@ -62,3 +62,4 @@
     "typescript": "^5.8.0"
   }
 }
+

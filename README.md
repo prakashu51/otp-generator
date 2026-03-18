@@ -1,4 +1,4 @@
-# otp-manager
+# redis-otp-manager
 
 Lightweight, Redis-backed OTP manager for Node.js apps.
 
@@ -17,7 +17,7 @@ This first implementation includes:
 ## Install
 
 ```bash
-npm install otp-manager
+npm install redis-otp-manager
 ```
 
 ## Quality Checks
@@ -29,7 +29,7 @@ npm run check
 ## Quick Start
 
 ```ts
-import { OTPManager, RedisAdapter } from "otp-manager";
+import { OTPManager, RedisAdapter } from "redis-otp-manager";
 
 const redisClient = /* your redis client */;
 
@@ -129,3 +129,4 @@ rate:{type}:{identifier}
 - alphanumeric tokens
 - hooks/events
 - email token helpers
+
