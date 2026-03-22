@@ -16,6 +16,7 @@ This package currently includes:
 - Optional resend cooldown
 - Max-attempt protection
 - NestJS module integration via `redis-otp-manager/nest`
+- Dual package support for ESM and CommonJS consumers
 
 ## Install
 
@@ -27,6 +28,26 @@ For NestJS apps, also install the Nest peer dependencies used by your app:
 
 ```bash
 npm install @nestjs/common @nestjs/core reflect-metadata rxjs
+```
+
+## Module Support
+
+This package now supports both:
+- ESM imports
+- CommonJS/Nest `ts-node/register` style resolution
+
+ESM:
+
+```ts
+import { OTPManager } from "redis-otp-manager";
+import { OTPModule } from "redis-otp-manager/nest";
+```
+
+CommonJS:
+
+```js
+const { OTPManager } = require("redis-otp-manager");
+const { OTPModule } = require("redis-otp-manager/nest");
 ```
 
 ## Quality Checks
@@ -70,7 +91,7 @@ await otp.verify({
 
 ## NestJS
 
-Import the Nest integration from the dedicated subpath so non-Nest users do not pull Nest dependencies.
+Import the Nest integration from the dedicated subpath so non-Nest users do not pull Nest dependencies unless they need them.
 
 ```ts
 import { Module } from "@nestjs/common";

@@ -1,6 +1,6 @@
 {
   "name": "redis-otp-manager",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Lightweight, Redis-backed OTP manager for Node.js apps",
   "repository": {
     "type": "git",
@@ -13,16 +13,20 @@
   "license": "MIT",
   "author": "Prakash",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/cjs/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/index.js"
     },
     "./nest": {
       "types": "./dist/integrations/nest/index.d.ts",
-      "import": "./dist/integrations/nest/index.js"
+      "import": "./dist/integrations/nest/index.js",
+      "require": "./dist/cjs/integrations/nest/index.js",
+      "default": "./dist/integrations/nest/index.js"
     }
   },
   "files": [
@@ -32,7 +36,7 @@
   ],
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/prepare-cjs.cjs",
     "test": "tsx --test test/**/*.test.ts",
     "check": "npm run build && npm run test",
     "prepublishOnly": "npm run build"
