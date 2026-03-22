@@ -17,6 +17,12 @@ export interface RateLimitConfig {
   max: number;
 }
 
+export interface IdentifierNormalizationConfig {
+  trim?: boolean;
+  lowercase?: boolean;
+  preserveCaseFor?: OTPChannel[];
+}
+
 export interface OTPManagerOptions {
   store: StoreAdapter;
   ttl: number;
@@ -24,6 +30,8 @@ export interface OTPManagerOptions {
   rateLimit?: RateLimitConfig;
   devMode?: boolean;
   otpLength?: number;
+  resendCooldown?: number;
+  identifierNormalization?: IdentifierNormalizationConfig;
 }
 
 export interface GenerateOTPResult {

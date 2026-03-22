@@ -5,6 +5,7 @@ export { MemoryAdapter } from "./adapters/memory.adapter.js";
 export type {
   GenerateOTPInput,
   GenerateOTPResult,
+  IdentifierNormalizationConfig,
   OTPManagerOptions,
   OTPPayload,
   RateLimitConfig,
@@ -18,4 +19,5 @@ export {
   OTPInvalidError,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
+  OTPResendCooldownError,
 } from "./errors/otp.errors.js";

@@ -11,7 +11,9 @@ This package currently includes:
 - Redis-compatible storage adapter
 - In-memory adapter for tests
 - Intent-aware key strategy
+- Conservative identifier normalization
 - Rate limiting
+- Optional resend cooldown
 - Max-attempt protection
 - NestJS module integration via `redis-otp-manager/nest`
 
@@ -44,11 +46,12 @@ const otp = new OTPManager({
   store: new RedisAdapter(redisClient),
   ttl: 300,
   maxAttempts: 5,
+  resendCooldown: 45,
   rateLimit: {
     window: 60,
     max: 3,
   },
-  devMode: process.env.NODE_ENV !== "production",
+  devMode: false,
 });
 
 const generated = await otp.generate({
@@ -83,6 +86,7 @@ const redisClient = createClient({ url: process.env.REDIS_URL });
       store: new RedisAdapter(redisClient),
       ttl: 300,
       maxAttempts: 5,
+      resendCooldown: 45,
       rateLimit: {
         window: 60,
         max: 3,
@@ -104,6 +108,7 @@ OTPModule.forRootAsync({
     store: new RedisAdapter(createClient({ url: config.getOrThrow("REDIS_URL") })),
     ttl: 300,
     maxAttempts: 5,
+    resendCooldown: 45,
   }),
 });
 ```
@@ -130,14 +135,25 @@ type OTPManagerOptions = {
   store: StoreAdapter;
   ttl: number;
   maxAttempts: number;
+  resendCooldown?: number;
   rateLimit?: {
     window: number;
     max: number;
   };
   devMode?: boolean;
   otpLength?: number;
+  identifierNormalization?: {
+    trim?: boolean;
+    lowercase?: boolean;
+    preserveCaseFor?: string[];
+  };
 };
 ```
+
+Normalization is backward-compatible and conservative by default:
+- identifiers are trimmed
+- identifiers are lowercased for most channels
+- `sms` and `token` preserve case by default
 
 ### `generate(input)`
 
@@ -177,6 +193,15 @@ Returns `true` or throws a typed error.
 - `OTPExpiredError`
 - `OTPInvalidError`
 - `OTPMaxAttemptsExceededError`
+- `OTPResendCooldownError`
+
+## Safer Production Defaults
+
+- `devMode: false`
+- `otpLength: 8` for higher-risk flows
+- `maxAttempts: 3`
+- `resendCooldown: 30` or higher to reduce abuse
+- keep Redis private and behind authenticated network access
 
 ## Key Design
 
@@ -184,6 +209,7 @@ Returns `true` or throws a typed error.
 otp:{intent}:{type}:{identifier}
 attempts:{intent}:{type}:{identifier}
 rate:{type}:{identifier}
+cooldown:{intent}:{type}:{identifier}
 ```
 
 ## Release Automation
@@ -204,6 +230,6 @@ git push origin v0.2.0
 
 ## Next Roadmap
 
-- token/email helpers
+- atomic Redis verification
 - hooks/events
 - analytics and observability

@@ -8,6 +8,7 @@ import {
   OTPManager,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
+  OTPResendCooldownError,
 } from "../src/index.js";
 
 function createManager() {
@@ -151,5 +152,79 @@ test("throws when required payload fields are missing", async () => {
       otp: "",
     }),
     TypeError,
+  );
+});
+
+test("normalizes identifiers so generate and verify match case-insensitively by default", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await manager.generate({
+    type: "email",
+    identifier: " User@Example.com ",
+    intent: "login",
+  });
+
+  const verified = await manager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp as string,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("preserves token identifier case by default", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await manager.generate({
+    type: "token",
+    identifier: "CaseSensitiveToken",
+    intent: "invite",
+  });
+
+  await assert.rejects(
+    manager.verify({
+      type: "token",
+      identifier: "casesensitivetoken",
+      intent: "invite",
+      otp: generated.otp as string,
+    }),
+    OTPExpiredError,
+  );
+});
+
+test("enforces resend cooldown when configured", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    resendCooldown: 60,
+    devMode: true,
+  });
+
+  await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  await assert.rejects(
+    manager.generate({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+    }),
+    OTPResendCooldownError,
   );
 });

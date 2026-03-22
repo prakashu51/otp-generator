@@ -15,3 +15,7 @@ export function buildAttemptsKey(payload: OTPPayload): string {
 export function buildRateLimitKey(payload: OTPPayload): string {
   return `rate:${payload.type}:${payload.identifier}`;
 }
+
+export function buildCooldownKey(payload: OTPPayload): string {
+  return `cooldown:${normalizeIntent(payload.intent)}:${payload.type}:${payload.identifier}`;
+}

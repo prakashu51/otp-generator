@@ -31,3 +31,9 @@ export class OTPMaxAttemptsExceededError extends OTPError {
     super(message, "OTP_MAX_ATTEMPTS_EXCEEDED");
   }
 }
+
+export class OTPResendCooldownError extends OTPError {
+  constructor(message = "OTP resend cooldown is active.") {
+    super(message, "OTP_RESEND_COOLDOWN");
+  }
+}
