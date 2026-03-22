@@ -15,6 +15,7 @@ This package currently includes:
 - Rate limiting
 - Optional resend cooldown
 - Max-attempt protection
+- Atomic Redis generate and verify paths using Lua scripts
 - NestJS module integration via `redis-otp-manager/nest`
 - Dual package support for ESM and CommonJS consumers
 
@@ -32,7 +33,7 @@ npm install @nestjs/common @nestjs/core reflect-metadata rxjs
 
 ## Module Support
 
-This package now supports both:
+This package supports both:
 - ESM imports
 - CommonJS/Nest `ts-node/register` style resolution
 
@@ -88,6 +89,16 @@ await otp.verify({
   otp: generated.otp ?? "123456",
 });
 ```
+
+## Production Security Notes
+
+When you use `RedisAdapter`, the package now takes the Redis-specific atomic path for:
+- OTP generation plus rate-limit/cooldown checks
+- OTP verification plus attempt tracking and OTP deletion
+
+That prevents the most important race condition in earlier versions where two parallel correct verification requests could both succeed.
+
+Simpler adapters like `MemoryAdapter` intentionally stay on the non-atomic fallback path to keep tests and local development lightweight.
 
 ## NestJS
 
@@ -223,6 +234,7 @@ Returns `true` or throws a typed error.
 - `maxAttempts: 3`
 - `resendCooldown: 30` or higher to reduce abuse
 - keep Redis private and behind authenticated network access
+- prefer `RedisAdapter` in production to get the atomic security path
 
 ## Key Design
 
@@ -237,7 +249,7 @@ cooldown:{intent}:{type}:{identifier}
 
 Publishing on every `main` merge is not recommended for npm packages because npm versions are immutable. The safer setup is:
 - merge to `main` runs CI only
-- publish happens when you push a version tag like `v0.2.0`
+- publish happens when you push a version tag like `v0.3.0`
 
 Required GitHub secrets:
 - `NPM_TOKEN`
@@ -245,12 +257,12 @@ Required GitHub secrets:
 Tag-based publish:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 ## Next Roadmap
 
-- atomic Redis verification
+- keyed HMAC for OTP hashing
 - hooks/events
 - analytics and observability

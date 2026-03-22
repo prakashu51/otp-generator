@@ -1,3 +1,4 @@
+import { RedisAdapter } from "../adapters/redis.adapter.js";
 import { generateNumericOtp } from "./otp.generator.js";
 import { hashOtp, verifyOtpHash } from "./otp.hash.js";
 import type {
@@ -10,6 +11,7 @@ import {
   OTPExpiredError,
   OTPInvalidError,
   OTPMaxAttemptsExceededError,
+  OTPRateLimitExceededError,
   OTPResendCooldownError,
 } from "../errors/otp.errors.js";
 import {
@@ -46,6 +48,37 @@ export class OTPManager {
     const attemptsKey = buildAttemptsKey(normalizedInput);
     const rateLimitKey = buildRateLimitKey(normalizedInput);
     const cooldownKey = buildCooldownKey(normalizedInput);
+    const otp = generateNumericOtp(this.options.otpLength);
+    const hashedOtp = hashOtp(otp);
+
+    if (this.options.store instanceof RedisAdapter) {
+      const atomicResult = await this.options.store.generateOtpAtomically({
+        otpKey,
+        attemptsKey,
+        rateLimitKey,
+        cooldownKey,
+        hashedOtp,
+        ttl: this.options.ttl,
+        rateWindow: this.options.rateLimit?.window,
+        rateMax: this.options.rateLimit?.max,
+        resendCooldown: this.options.resendCooldown,
+      });
+
+      if (atomicResult === "cooldown") {
+        throw new OTPResendCooldownError();
+      }
+
+      if (atomicResult === "rate_limit") {
+        throw new OTPRateLimitExceededError();
+      }
+
+      if (atomicResult === "ok") {
+        return {
+          expiresIn: this.options.ttl,
+          otp: this.options.devMode ? otp : undefined,
+        };
+      }
+    }
 
     if (this.options.resendCooldown) {
       const cooldownActive = await this.options.store.get(cooldownKey);
@@ -56,9 +89,6 @@ export class OTPManager {
     }
 
     await assertWithinRateLimit(this.options.store, rateLimitKey, this.options.rateLimit);
-
-    const otp = generateNumericOtp(this.options.otpLength);
-    const hashedOtp = hashOtp(otp);
 
     await this.options.store.set(otpKey, hashedOtp, this.options.ttl);
     await this.options.store.del(attemptsKey);
@@ -86,6 +116,32 @@ export class OTPManager {
 
     const otpKey = buildOtpKey(normalizedInput);
     const attemptsKey = buildAttemptsKey(normalizedInput);
+
+    if (this.options.store instanceof RedisAdapter) {
+      const atomicResult = await this.options.store.verifyOtpAtomically({
+        otpKey,
+        attemptsKey,
+        providedHash: hashOtp(input.otp),
+        ttl: this.options.ttl,
+        maxAttempts: this.options.maxAttempts,
+      });
+
+      if (atomicResult === "verified") {
+        return true;
+      }
+
+      if (atomicResult === "expired") {
+        throw new OTPExpiredError();
+      }
+
+      if (atomicResult === "max_attempts") {
+        throw new OTPMaxAttemptsExceededError();
+      }
+
+      if (atomicResult === "invalid") {
+        throw new OTPInvalidError();
+      }
+    }
 
     const storedHash = await this.options.store.get(otpKey);
 
