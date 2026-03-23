@@ -6,6 +6,7 @@ export type {
   GenerateOTPInput,
   GenerateOTPResult,
   IdentifierNormalizationConfig,
+  OTPHashingOptions,
   OTPManagerOptions,
   OTPPayload,
   RateLimitConfig,

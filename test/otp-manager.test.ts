@@ -228,3 +228,137 @@ test("enforces resend cooldown when configured", async () => {
     OTPResendCooldownError,
   );
 });
+
+test("supports keyed hmac hashing for new otp generation", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hashing: {
+      secret: "current-secret",
+    },
+  });
+
+  const generated = await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const verified = await manager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp as string,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("supports secret rotation with previous secrets", async () => {
+  const oldManager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hashing: {
+      secret: "old-secret",
+    },
+  });
+
+  const generated = await oldManager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const rotatedManager = new OTPManager({
+    store: (oldManager as any).options.store,
+    ttl: 30,
+    maxAttempts: 3,
+    hashing: {
+      secret: "new-secret",
+      previousSecrets: ["old-secret"],
+    },
+  });
+
+  const verified = await rotatedManager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp as string,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("supports legacy otp verification during hmac migration by default", async () => {
+  const store = new MemoryAdapter();
+  const legacyManager = new OTPManager({
+    store,
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await legacyManager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const hardenedManager = new OTPManager({
+    store,
+    ttl: 30,
+    maxAttempts: 3,
+    hashing: {
+      secret: "current-secret",
+    },
+  });
+
+  const verified = await hardenedManager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp as string,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("can disable legacy verification after migration", async () => {
+  const store = new MemoryAdapter();
+  const legacyManager = new OTPManager({
+    store,
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await legacyManager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const hardenedManager = new OTPManager({
+    store,
+    ttl: 30,
+    maxAttempts: 3,
+    hashing: {
+      secret: "current-secret",
+      allowLegacyVerify: false,
+    },
+  });
+
+  await assert.rejects(
+    hardenedManager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: generated.otp as string,
+    }),
+    OTPInvalidError,
+  );
+});

@@ -27,7 +27,7 @@ export interface AtomicGenerateParams {
 export interface AtomicVerifyParams {
   otpKey: string;
   attemptsKey: string;
-  providedHash: string;
+  candidateHashes: string[];
   ttl: number;
   maxAttempts: number;
 }
@@ -69,18 +69,23 @@ if not storedHash then
   return 'expired'
 end
 
-if storedHash == ARGV[1] then
-  redis.call('DEL', KEYS[1])
-  redis.call('DEL', KEYS[2])
-  return 'verified'
+local candidateCount = tonumber(ARGV[1])
+for index = 1, candidateCount do
+  if storedHash == ARGV[index + 1] then
+    redis.call('DEL', KEYS[1])
+    redis.call('DEL', KEYS[2])
+    return 'verified'
+  end
 end
 
+local ttlIndex = candidateCount + 2
+local maxAttemptsIndex = candidateCount + 3
 local attempts = redis.call('INCR', KEYS[2])
 if attempts == 1 then
-  redis.call('EXPIRE', KEYS[2], tonumber(ARGV[2]))
+  redis.call('EXPIRE', KEYS[2], tonumber(ARGV[ttlIndex]))
 end
 
-if attempts >= tonumber(ARGV[3]) then
+if attempts >= tonumber(ARGV[maxAttemptsIndex]) then
   redis.call('DEL', KEYS[1])
   redis.call('DEL', KEYS[2])
   return 'max_attempts'
@@ -146,7 +151,12 @@ export class RedisAdapter implements StoreAdapter {
 
     const result = await this.client.eval(ATOMIC_VERIFY_SCRIPT, {
       keys: [params.otpKey, params.attemptsKey],
-      arguments: [params.providedHash, String(params.ttl), String(params.maxAttempts)],
+      arguments: [
+        String(params.candidateHashes.length),
+        ...params.candidateHashes,
+        String(params.ttl),
+        String(params.maxAttempts),
+      ],
     });
 
     if (
@@ -161,3 +171,4 @@ export class RedisAdapter implements StoreAdapter {
     return null;
   }
 }
+
