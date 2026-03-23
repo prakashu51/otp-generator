@@ -1,9 +1,11 @@
 export type OTPChannel = "email" | "sms" | "token" | (string & {});
+export type OTPMetadata = Record<string, unknown>;
 
 export interface OTPPayload {
   type: OTPChannel;
   identifier: string;
   intent?: string;
+  metadata?: OTPMetadata;
 }
 
 export interface GenerateOTPInput extends OTPPayload {}
@@ -29,6 +31,69 @@ export interface OTPHashingOptions {
   allowLegacyVerify?: boolean;
 }
 
+export interface OTPEventContext {
+  type: OTPChannel;
+  identifier: string;
+  normalizedIdentifier: string;
+  intent: string;
+  timestamp: string;
+  metadata?: OTPMetadata;
+}
+
+export interface OTPGeneratedEvent extends OTPEventContext {
+  expiresIn: number;
+  devMode: boolean;
+}
+
+export interface OTPVerifiedEvent extends OTPEventContext {}
+
+export interface OTPFailedEvent extends OTPEventContext {
+  reason: "invalid" | "expired";
+  attemptsUsed?: number;
+  attemptsRemaining?: number;
+}
+
+export interface OTPLockedEvent extends OTPEventContext {
+  maxAttempts: number;
+}
+
+export interface OTPRateLimitedEvent extends OTPEventContext {
+  window: number;
+  max: number;
+}
+
+export interface OTPCooldownBlockedEvent extends OTPEventContext {
+  resendCooldown: number;
+}
+
+export interface OTPHookErrorContext {
+  event:
+    | "generated"
+    | "verified"
+    | "failed"
+    | "locked"
+    | "rate_limited"
+    | "cooldown_blocked";
+  payload:
+    | OTPGeneratedEvent
+    | OTPVerifiedEvent
+    | OTPFailedEvent
+    | OTPLockedEvent
+    | OTPRateLimitedEvent
+    | OTPCooldownBlockedEvent;
+}
+
+export interface OTPHooks {
+  onGenerated?: (event: OTPGeneratedEvent) => void | Promise<void>;
+  onVerified?: (event: OTPVerifiedEvent) => void | Promise<void>;
+  onFailed?: (event: OTPFailedEvent) => void | Promise<void>;
+  onLocked?: (event: OTPLockedEvent) => void | Promise<void>;
+  onRateLimited?: (event: OTPRateLimitedEvent) => void | Promise<void>;
+  onCooldownBlocked?: (event: OTPCooldownBlockedEvent) => void | Promise<void>;
+  onHookError?: (error: unknown, context: OTPHookErrorContext) => void | Promise<void>;
+  throwOnError?: boolean;
+}
+
 export interface OTPManagerOptions {
   store: StoreAdapter;
   ttl: number;
@@ -39,6 +104,7 @@ export interface OTPManagerOptions {
   resendCooldown?: number;
   identifierNormalization?: IdentifierNormalizationConfig;
   hashing?: OTPHashingOptions;
+  hooks?: OTPHooks;
 }
 
 export interface GenerateOTPResult {

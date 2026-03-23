@@ -24,6 +24,10 @@ function createManager() {
   });
 }
 
+function flushHooks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 test("generates and verifies an OTP successfully", async () => {
   const manager = createManager();
   const result = await manager.generate({
@@ -257,8 +261,9 @@ test("supports keyed hmac hashing for new otp generation", async () => {
 });
 
 test("supports secret rotation with previous secrets", async () => {
+  const store = new MemoryAdapter();
   const oldManager = new OTPManager({
-    store: new MemoryAdapter(),
+    store,
     ttl: 30,
     maxAttempts: 3,
     devMode: true,
@@ -274,7 +279,7 @@ test("supports secret rotation with previous secrets", async () => {
   });
 
   const rotatedManager = new OTPManager({
-    store: (oldManager as any).options.store,
+    store,
     ttl: 30,
     maxAttempts: 3,
     hashing: {
@@ -361,4 +366,213 @@ test("can disable legacy verification after migration", async () => {
     }),
     OTPInvalidError,
   );
+});
+
+test("emits generated and verified hooks with metadata and normalized identifier", async () => {
+  const generatedEvents: Array<Record<string, unknown>> = [];
+  const verifiedEvents: Array<Record<string, unknown>> = [];
+
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hooks: {
+      onGenerated: async (event) => {
+        generatedEvents.push(event);
+      },
+      onVerified: async (event) => {
+        verifiedEvents.push(event);
+      },
+    },
+  });
+
+  const generated = await manager.generate({
+    type: "email",
+    identifier: " User@Example.com ",
+    intent: "login",
+    metadata: {
+      requestId: "req_123",
+    },
+  });
+
+  await flushHooks();
+
+  await manager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp as string,
+    metadata: {
+      requestId: "req_123",
+    },
+  });
+
+  await flushHooks();
+
+  assert.equal(generatedEvents.length, 1);
+  assert.equal(verifiedEvents.length, 1);
+  assert.equal(generatedEvents[0].normalizedIdentifier, "user@example.com");
+  assert.equal(verifiedEvents[0].normalizedIdentifier, "user@example.com");
+  assert.deepEqual(generatedEvents[0].metadata, { requestId: "req_123" });
+});
+
+test("emits failed and locked hooks for invalid and exhausted verification attempts", async () => {
+  const failedEvents: Array<Record<string, unknown>> = [];
+  const lockedEvents: Array<Record<string, unknown>> = [];
+
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 2,
+    devMode: true,
+    hooks: {
+      onFailed: async (event) => {
+        failedEvents.push(event);
+      },
+      onLocked: async (event) => {
+        lockedEvents.push(event);
+      },
+    },
+  });
+
+  await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPInvalidError,
+  );
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPMaxAttemptsExceededError,
+  );
+
+  await flushHooks();
+
+  assert.equal(failedEvents.length, 1);
+  assert.equal(failedEvents[0].reason, "invalid");
+  assert.equal(lockedEvents.length, 1);
+  assert.equal(lockedEvents[0].maxAttempts, 2);
+});
+
+test("emits cooldown and rate-limited hooks", async () => {
+  const cooldownEvents: Array<Record<string, unknown>> = [];
+  const rateLimitedEvents: Array<Record<string, unknown>> = [];
+
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    resendCooldown: 60,
+    rateLimit: {
+      window: 60,
+      max: 1,
+    },
+    devMode: true,
+    hooks: {
+      onCooldownBlocked: async (event) => {
+        cooldownEvents.push(event);
+      },
+      onRateLimited: async (event) => {
+        rateLimitedEvents.push(event);
+      },
+    },
+  });
+
+  await manager.generate({
+    type: "email",
+    identifier: "cooldown@example.com",
+    intent: "login",
+  });
+
+  await assert.rejects(
+    manager.generate({
+      type: "email",
+      identifier: "cooldown@example.com",
+      intent: "login",
+    }),
+    OTPResendCooldownError,
+  );
+
+  const rateManager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    rateLimit: {
+      window: 60,
+      max: 1,
+    },
+    devMode: true,
+    hooks: {
+      onRateLimited: async (event) => {
+        rateLimitedEvents.push(event);
+      },
+    },
+  });
+
+  await rateManager.generate({
+    type: "email",
+    identifier: "rate@example.com",
+    intent: "login",
+  });
+
+  await assert.rejects(
+    rateManager.generate({
+      type: "email",
+      identifier: "rate@example.com",
+      intent: "login",
+    }),
+    OTPRateLimitExceededError,
+  );
+
+  await flushHooks();
+
+  assert.equal(cooldownEvents.length, 1);
+  assert.equal(cooldownEvents[0].resendCooldown, 60);
+  assert.equal(rateLimitedEvents.length, 1);
+  assert.equal(rateLimitedEvents[0].max, 1);
+});
+
+test("hook errors are non-blocking by default and reported to onHookError", async () => {
+  const hookErrors: string[] = [];
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hooks: {
+      onGenerated: async () => {
+        throw new Error("hook exploded");
+      },
+      onHookError: async (error) => {
+        hookErrors.push((error as Error).message);
+      },
+    },
+  });
+
+  const generated = await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  await flushHooks();
+
+  assert.match(generated.otp ?? "", /^\d{6}$/);
+  assert.deepEqual(hookErrors, ["hook exploded"]);
 });
