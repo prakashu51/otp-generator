@@ -5,19 +5,25 @@ import type {
   GenerateOTPInput,
   GenerateOTPResult,
   OTPCooldownBlockedEvent,
+  OTPCooldownConfig,
   OTPEventContext,
   OTPFailedEvent,
   OTPGeneratedEvent,
   OTPHookErrorContext,
   OTPLockedEvent,
+  OTPLockoutConfig,
   OTPManagerOptions,
   OTPRateLimitedEvent,
+  OTPRateLimitAlgorithm,
+  RateLimitConfig,
+  OTPThrottleScope,
   OTPVerifiedEvent,
   VerifyOTPInput,
 } from "./otp.types.js";
 import {
   OTPExpiredError,
   OTPInvalidError,
+  OTPLockedError,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
   OTPResendCooldownError,
@@ -25,6 +31,7 @@ import {
 import {
   buildAttemptsKey,
   buildCooldownKey,
+  buildLockKey,
   buildOtpKey,
   buildRateLimitKey,
 } from "../utils/key-builder.js";
@@ -43,6 +50,12 @@ export class OTPManager {
       otpLength: options.otpLength ?? 6,
       devMode: options.devMode ?? false,
     };
+
+    const resolvedRateLimit = this.getResolvedRateLimit();
+
+    if (resolvedRateLimit?.algorithm === "sliding_window" && !(options.store instanceof RedisAdapter)) {
+      throw new TypeError("Sliding-window rate limiting currently requires RedisAdapter.");
+    }
   }
 
   async generate(input: GenerateOTPInput): Promise<GenerateOTPResult> {
@@ -53,12 +66,29 @@ export class OTPManager {
     );
     const eventContext = this.buildEventContext(input, normalizedInput.identifier);
 
+    const resolvedRateLimit = this.getResolvedRateLimit();
+    const resolvedCooldown = this.getResolvedCooldown();
+    const resolvedLockout = this.getResolvedLockout();
+
     const otpKey = buildOtpKey(normalizedInput);
     const attemptsKey = buildAttemptsKey(normalizedInput);
-    const rateLimitKey = buildRateLimitKey(normalizedInput);
-    const cooldownKey = buildCooldownKey(normalizedInput);
+    const rateLimitKey = buildRateLimitKey(normalizedInput, resolvedRateLimit?.scope ?? "channel");
+    const cooldownKey = buildCooldownKey(
+      normalizedInput,
+      resolvedCooldown?.scope ?? "intent_channel",
+    );
+    const lockKey = buildLockKey(normalizedInput, resolvedLockout?.scope ?? "intent_channel");
     const otp = generateNumericOtp(this.options.otpLength);
     const storedHash = createStoredOtpHash(otp, normalizedInput, this.options.hashing);
+
+    if (this.shouldCheckGenerateLock(resolvedLockout)) {
+      const locked = await this.options.store.get(lockKey);
+
+      if (locked) {
+        await this.emitLocked(eventContext, "generate", resolvedLockout);
+        throw new OTPLockedError();
+      }
+    }
 
     if (this.options.store instanceof RedisAdapter) {
       const atomicResult = await this.options.store.generateOtpAtomically({
@@ -66,20 +96,28 @@ export class OTPManager {
         attemptsKey,
         rateLimitKey,
         cooldownKey,
+        lockKey,
         hashedOtp: storedHash,
         ttl: this.options.ttl,
-        rateWindow: this.options.rateLimit?.window,
-        rateMax: this.options.rateLimit?.max,
-        resendCooldown: this.options.resendCooldown,
+        rateWindow: resolvedRateLimit?.window,
+        rateMax: resolvedRateLimit?.max,
+        rateAlgorithm: resolvedRateLimit?.algorithm,
+        resendCooldown: resolvedCooldown?.seconds,
+        checkLock: this.shouldCheckGenerateLock(resolvedLockout),
       });
 
+      if (atomicResult === "locked") {
+        await this.emitLocked(eventContext, "generate", resolvedLockout);
+        throw new OTPLockedError();
+      }
+
       if (atomicResult === "cooldown") {
-        await this.emitCooldownBlocked(eventContext);
+        await this.emitCooldownBlocked(eventContext, resolvedCooldown);
         throw new OTPResendCooldownError();
       }
 
       if (atomicResult === "rate_limit") {
-        await this.emitRateLimited(eventContext);
+        await this.emitRateLimited(eventContext, resolvedRateLimit);
         throw new OTPRateLimitExceededError();
       }
 
@@ -94,20 +132,20 @@ export class OTPManager {
       }
     }
 
-    if (this.options.resendCooldown) {
+    if (resolvedCooldown) {
       const cooldownActive = await this.options.store.get(cooldownKey);
 
       if (cooldownActive) {
-        await this.emitCooldownBlocked(eventContext);
+        await this.emitCooldownBlocked(eventContext, resolvedCooldown);
         throw new OTPResendCooldownError();
       }
     }
 
     try {
-      await assertWithinRateLimit(this.options.store, rateLimitKey, this.options.rateLimit);
+      await assertWithinRateLimit(this.options.store, rateLimitKey, resolvedRateLimit);
     } catch (error) {
       if (error instanceof OTPRateLimitExceededError) {
-        await this.emitRateLimited(eventContext);
+        await this.emitRateLimited(eventContext, resolvedRateLimit);
       }
       throw error;
     }
@@ -115,8 +153,8 @@ export class OTPManager {
     await this.options.store.set(otpKey, storedHash, this.options.ttl);
     await this.options.store.del(attemptsKey);
 
-    if (this.options.resendCooldown) {
-      await this.options.store.set(cooldownKey, "1", this.options.resendCooldown);
+    if (resolvedCooldown) {
+      await this.options.store.set(cooldownKey, "1", resolvedCooldown.seconds);
     }
 
     const result = {
@@ -135,6 +173,7 @@ export class OTPManager {
       this.options.identifierNormalization,
     );
     const eventContext = this.buildEventContext(input, normalizedInput.identifier);
+    const resolvedLockout = this.getResolvedLockout();
 
     if (!input.otp || !input.otp.trim()) {
       throw new TypeError("OTP must be a non-empty string.");
@@ -142,19 +181,33 @@ export class OTPManager {
 
     const otpKey = buildOtpKey(normalizedInput);
     const attemptsKey = buildAttemptsKey(normalizedInput);
+    const lockKey = buildLockKey(normalizedInput, resolvedLockout?.scope ?? "intent_channel");
     const candidateHashes = buildVerificationHashes(
       input.otp,
       normalizedInput,
       this.options.hashing,
     );
 
+    if (this.shouldCheckVerifyLock(resolvedLockout)) {
+      const locked = await this.options.store.get(lockKey);
+
+      if (locked) {
+        await this.emitLocked(eventContext, "verify", resolvedLockout);
+        throw new OTPLockedError();
+      }
+    }
+
     if (this.options.store instanceof RedisAdapter) {
       const atomicResult = await this.options.store.verifyOtpAtomically({
         otpKey,
         attemptsKey,
+        lockKey,
         candidateHashes,
         ttl: this.options.ttl,
         maxAttempts: this.options.maxAttempts,
+        checkLock: this.shouldCheckVerifyLock(resolvedLockout),
+        lockoutAfter: resolvedLockout?.afterAttempts,
+        lockoutSeconds: resolvedLockout?.seconds,
       });
 
       if (atomicResult === "verified") {
@@ -167,8 +220,13 @@ export class OTPManager {
         throw new OTPExpiredError();
       }
 
+      if (atomicResult === "locked") {
+        await this.emitLocked(eventContext, "verify", resolvedLockout);
+        throw new OTPLockedError();
+      }
+
       if (atomicResult === "max_attempts") {
-        await this.emitLocked(eventContext);
+        await this.emitLocked(eventContext, "verify", resolvedLockout);
         throw new OTPMaxAttemptsExceededError();
       }
 
@@ -190,10 +248,18 @@ export class OTPManager {
     if (!isValid) {
       const attempts = await this.options.store.increment(attemptsKey, this.options.ttl);
 
+      if (resolvedLockout && attempts >= resolvedLockout.afterAttempts) {
+        await this.options.store.set(lockKey, "1", resolvedLockout.seconds);
+        await this.options.store.del(otpKey);
+        await this.options.store.del(attemptsKey);
+        await this.emitLocked(eventContext, "verify", resolvedLockout);
+        throw new OTPLockedError();
+      }
+
       if (attempts >= this.options.maxAttempts) {
         await this.options.store.del(otpKey);
         await this.options.store.del(attemptsKey);
-        await this.emitLocked(eventContext);
+        await this.emitLocked(eventContext, "verify", resolvedLockout);
         throw new OTPMaxAttemptsExceededError();
       }
 
@@ -206,6 +272,56 @@ export class OTPManager {
     await this.emitVerified(eventContext);
 
     return true;
+  }
+
+  private getResolvedCooldown(): OTPCooldownConfig | undefined {
+    if (this.options.cooldown) {
+      return {
+        seconds: this.options.cooldown.seconds,
+        scope: this.options.cooldown.scope ?? "intent_channel",
+      };
+    }
+
+    if (this.options.resendCooldown) {
+      return {
+        seconds: this.options.resendCooldown,
+        scope: "intent_channel",
+      };
+    }
+
+    return undefined;
+  }
+
+  private getResolvedRateLimit(): RateLimitConfig | undefined {
+    if (!this.options.rateLimit) {
+      return undefined;
+    }
+
+    return {
+      ...this.options.rateLimit,
+      scope: this.options.rateLimit.scope ?? "channel",
+      algorithm: this.options.rateLimit.algorithm ?? "fixed_window",
+    };
+  }
+
+  private getResolvedLockout(): OTPLockoutConfig | undefined {
+    if (!this.options.lockout) {
+      return undefined;
+    }
+
+    return {
+      ...this.options.lockout,
+      appliesTo: this.options.lockout.appliesTo ?? "both",
+      scope: this.options.lockout.scope ?? "intent_channel",
+    };
+  }
+
+  private shouldCheckGenerateLock(lockout?: OTPLockoutConfig): boolean {
+    return lockout?.appliesTo === "generate" || lockout?.appliesTo === "both";
+  }
+
+  private shouldCheckVerifyLock(lockout?: OTPLockoutConfig): boolean {
+    return lockout?.appliesTo === "verify" || lockout?.appliesTo === "both";
   }
 
   private buildEventContext(
@@ -248,33 +364,50 @@ export class OTPManager {
     });
   }
 
-  private async emitLocked(context: OTPEventContext): Promise<void> {
+  private async emitLocked(
+    context: OTPEventContext,
+    operation: OTPLockedEvent["operation"],
+    lockout?: OTPLockoutConfig,
+  ): Promise<void> {
     await this.dispatchHook("locked", {
       ...context,
       maxAttempts: this.options.maxAttempts,
+      operation,
+      lockoutSeconds: lockout?.seconds,
+      appliesTo: lockout?.appliesTo,
+      scope: lockout?.scope,
     });
   }
 
-  private async emitRateLimited(context: OTPEventContext): Promise<void> {
-    if (!this.options.rateLimit) {
+  private async emitRateLimited(
+    context: OTPEventContext,
+    rateLimit?: RateLimitConfig,
+  ): Promise<void> {
+    if (!rateLimit) {
       return;
     }
 
     await this.dispatchHook("rate_limited", {
       ...context,
-      window: this.options.rateLimit.window,
-      max: this.options.rateLimit.max,
+      window: rateLimit.window,
+      max: rateLimit.max,
+      scope: rateLimit.scope ?? "channel",
+      algorithm: rateLimit.algorithm ?? "fixed_window",
     });
   }
 
-  private async emitCooldownBlocked(context: OTPEventContext): Promise<void> {
-    if (!this.options.resendCooldown) {
+  private async emitCooldownBlocked(
+    context: OTPEventContext,
+    cooldown?: OTPCooldownConfig,
+  ): Promise<void> {
+    if (!cooldown) {
       return;
     }
 
     await this.dispatchHook("cooldown_blocked", {
       ...context,
-      resendCooldown: this.options.resendCooldown,
+      resendCooldown: cooldown.seconds,
+      scope: cooldown.scope ?? "intent_channel",
     });
   }
 
@@ -364,6 +497,16 @@ function validateManagerOptions(options: OTPManagerOptions): void {
     throw new TypeError("resendCooldown must be a positive integer when provided.");
   }
 
+  if (options.cooldown) {
+    if (!Number.isInteger(options.cooldown.seconds) || options.cooldown.seconds <= 0) {
+      throw new TypeError("cooldown.seconds must be a positive integer.");
+    }
+
+    if (options.cooldown.scope && !isValidScope(options.cooldown.scope)) {
+      throw new TypeError("cooldown.scope must be a supported throttle scope.");
+    }
+  }
+
   if (options.rateLimit) {
     if (!Number.isInteger(options.rateLimit.window) || options.rateLimit.window <= 0) {
       throw new TypeError("rateLimit.window must be a positive integer.");
@@ -371,6 +514,43 @@ function validateManagerOptions(options: OTPManagerOptions): void {
 
     if (!Number.isInteger(options.rateLimit.max) || options.rateLimit.max <= 0) {
       throw new TypeError("rateLimit.max must be a positive integer.");
+    }
+
+    if (options.rateLimit.scope && !isValidScope(options.rateLimit.scope)) {
+      throw new TypeError("rateLimit.scope must be a supported throttle scope.");
+    }
+
+    if (
+      options.rateLimit.algorithm &&
+      options.rateLimit.algorithm !== "fixed_window" &&
+      options.rateLimit.algorithm !== "sliding_window"
+    ) {
+      throw new TypeError("rateLimit.algorithm must be fixed_window or sliding_window.");
+    }
+  }
+
+  if (options.lockout) {
+    if (!Number.isInteger(options.lockout.seconds) || options.lockout.seconds <= 0) {
+      throw new TypeError("lockout.seconds must be a positive integer.");
+    }
+
+    if (!Number.isInteger(options.lockout.afterAttempts) || options.lockout.afterAttempts <= 0) {
+      throw new TypeError("lockout.afterAttempts must be a positive integer.");
+    }
+
+    if (options.lockout.afterAttempts > options.maxAttempts) {
+      throw new TypeError("lockout.afterAttempts cannot be greater than maxAttempts.");
+    }
+
+    if (options.lockout.scope && !isValidScope(options.lockout.scope)) {
+      throw new TypeError("lockout.scope must be a supported throttle scope.");
+    }
+
+    if (
+      options.lockout.appliesTo &&
+      !["verify", "generate", "both"].includes(options.lockout.appliesTo)
+    ) {
+      throw new TypeError("lockout.appliesTo must be verify, generate, or both.");
     }
   }
 
@@ -450,3 +630,8 @@ function validatePayload(input: GenerateOTPInput | VerifyOTPInput): void {
     throw new TypeError("identifier must be a non-empty string.");
   }
 }
+
+function isValidScope(scope: string): scope is OTPThrottleScope {
+  return ["identifier", "intent", "channel", "intent_channel"].includes(scope);
+}
+

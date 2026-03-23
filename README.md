@@ -12,13 +12,12 @@ This package currently includes:
 - Legacy SHA-256 verification compatibility for migrations
 - Hook-based observability events
 - Structured metadata support for audit and logging context
+- Policy-based resend cooldown
+- Lock windows for abuse control
+- Scoped throttling by identifier, intent, channel, or combined intent+channel
+- Optional Redis sliding-window rate limiting
 - Redis-compatible storage adapter
 - In-memory adapter for tests
-- Intent-aware key strategy
-- Conservative identifier normalization
-- Rate limiting
-- Optional resend cooldown
-- Max-attempt protection
 - Atomic Redis generate and verify paths using Lua scripts
 - NestJS module integration via `redis-otp-manager/nest`
 - Dual package support for ESM and CommonJS consumers
@@ -29,44 +28,70 @@ This package currently includes:
 npm install redis-otp-manager
 ```
 
-For NestJS apps, also install the Nest peer dependencies used by your app:
+## Throughput And Abuse Controls
 
-```bash
-npm install @nestjs/common @nestjs/core reflect-metadata rxjs
-```
-
-## Quality Checks
-
-```bash
-npm run check
-```
-
-## Quick Start
+`v0.6.0` introduces richer abuse-control policies while keeping older simple config forms working.
 
 ```ts
-import { OTPManager, RedisAdapter } from "redis-otp-manager";
-
-const redisClient = /* your redis client */;
-
 const otp = new OTPManager({
   store: new RedisAdapter(redisClient),
   ttl: 300,
   maxAttempts: 5,
-  resendCooldown: 45,
+  cooldown: {
+    seconds: 30,
+    scope: "intent_channel",
+  },
   rateLimit: {
     window: 60,
     max: 3,
+    scope: "intent_channel",
+    algorithm: "fixed_window",
   },
-  devMode: false,
-  hashing: {
-    secret: process.env.OTP_HMAC_SECRET,
+  lockout: {
+    seconds: 300,
+    afterAttempts: 3,
+    appliesTo: "both",
+    scope: "intent_channel",
   },
 });
 ```
 
+### Cooldown Policy
+
+Supported scopes:
+- `identifier`
+- `intent`
+- `channel`
+- `intent_channel`
+
+Legacy `resendCooldown` still works and maps to the previous default behavior.
+
+### Lock Windows
+
+Lock windows set a temporary lock after repeated abuse and can block:
+- `verify`
+- `generate`
+- `both`
+
+A locked target throws `OTPLockedError`.
+
+### Rate Limiting
+
+Supported algorithms:
+- `fixed_window`
+- `sliding_window`
+
+`sliding_window` currently requires `RedisAdapter`.
+
 ## Observability Hooks
 
-`v0.5.0` adds hook-based observability without changing the core OTP flow.
+You can observe:
+- `generated`
+- `verified`
+- `failed`
+- `locked`
+- `rate_limited`
+- `cooldown_blocked`
 
 ```ts
 const otp = new OTPManager({
@@ -80,39 +105,6 @@ const otp = new OTPManager({
     onLocked: async (event) => logger.warn("otp_locked", event),
     onRateLimited: async (event) => logger.warn("otp_rate_limited", event),
     onCooldownBlocked: async (event) => logger.warn("otp_cooldown_blocked", event),
-    onHookError: async (error, context) => logger.error("otp_hook_error", { error, context }),
-  },
-});
-```
-
-Supported lifecycle hooks:
-- `onGenerated`
-- `onVerified`
-- `onFailed`
-- `onLocked`
-- `onRateLimited`
-- `onCooldownBlocked`
-- `onHookError`
-
-Default behavior:
-- hooks are optional
-- hook execution is non-blocking by default
-- hook failures do not break OTP generation or verification unless `throwOnError: true`
-
-## Structured Metadata
-
-You can pass request-scoped metadata into both `generate()` and `verify()`.
-This metadata is forwarded to hooks but is not stored in Redis.
-
-```ts
-await otp.generate({
-  type: "email",
-  identifier: "user@example.com",
-  intent: "login",
-  metadata: {
-    requestId: "req_123",
-    userId: "user_42",
-    ip: "203.0.113.10",
   },
 });
 ```
@@ -122,37 +114,24 @@ await otp.generate({
 When `hashing.secret` is configured, new OTPs are stored using keyed HMAC instead of plain SHA-256.
 
 ```ts
-const otp = new OTPManager({
-  store: new RedisAdapter(redisClient),
-  ttl: 300,
-  maxAttempts: 3,
-  hashing: {
-    secret: process.env.OTP_HMAC_SECRET,
-    previousSecrets: [process.env.OTP_PREVIOUS_SECRET ?? ""].filter(Boolean),
-    allowLegacyVerify: true,
-  },
-});
+hashing: {
+  secret: process.env.OTP_HMAC_SECRET,
+  previousSecrets: [process.env.OTP_PREVIOUS_SECRET ?? ""].filter(Boolean),
+  allowLegacyVerify: true,
+}
 ```
 
-Recommended migration strategy:
-- deploy `hashing.secret`
-- keep `allowLegacyVerify: true` during migration
-- optionally add `previousSecrets` during secret rotation
-- after old in-flight OTPs naturally expire, you can disable legacy verification if desired
+## Safer Production Defaults
 
-## Production Security Notes
-
-When you use `RedisAdapter`, the package takes the Redis-specific atomic path for:
-- OTP generation plus rate-limit/cooldown checks
-- OTP verification plus attempt tracking and OTP deletion
-
-That prevents the most important race condition from earlier versions where two parallel correct verification requests could both succeed.
-
-Simpler adapters like `MemoryAdapter` intentionally stay on the non-atomic fallback path to keep tests and local development lightweight.
+- `devMode: false`
+- `otpLength: 8` for higher-risk flows
+- `maxAttempts: 3`
+- `cooldown.seconds: 30` or higher
+- `lockout.seconds: 300` after repeated failures
+- `hashing.secret` configured in production
+- prefer `RedisAdapter` in production to get atomic and sliding-window paths
 
 ## API
-
-### `new OTPManager(options)`
 
 ```ts
 type OTPManagerOptions = {
@@ -160,61 +139,33 @@ type OTPManagerOptions = {
   ttl: number;
   maxAttempts: number;
   resendCooldown?: number;
+  cooldown?: {
+    seconds: number;
+    scope?: "identifier" | "intent" | "channel" | "intent_channel";
+  };
   rateLimit?: {
     window: number;
     max: number;
+    scope?: "identifier" | "intent" | "channel" | "intent_channel";
+    algorithm?: "fixed_window" | "sliding_window";
   };
-  devMode?: boolean;
-  otpLength?: number;
-  identifierNormalization?: {
-    trim?: boolean;
-    lowercase?: boolean;
-    preserveCaseFor?: string[];
-  };
-  hashing?: {
-    secret?: string;
-    previousSecrets?: string[];
-    allowLegacyVerify?: boolean;
-  };
-  hooks?: {
-    onGenerated?: (event) => void | Promise<void>;
-    onVerified?: (event) => void | Promise<void>;
-    onFailed?: (event) => void | Promise<void>;
-    onLocked?: (event) => void | Promise<void>;
-    onRateLimited?: (event) => void | Promise<void>;
-    onCooldownBlocked?: (event) => void | Promise<void>;
-    onHookError?: (error, context) => void | Promise<void>;
-    throwOnError?: boolean;
+  lockout?: {
+    seconds: number;
+    afterAttempts: number;
+    appliesTo?: "verify" | "generate" | "both";
+    scope?: "identifier" | "intent" | "channel" | "intent_channel";
   };
 };
 ```
 
-### Errors
+## Errors
 
 - `OTPRateLimitExceededError`
 - `OTPExpiredError`
 - `OTPInvalidError`
 - `OTPMaxAttemptsExceededError`
 - `OTPResendCooldownError`
-
-## Safer Production Defaults
-
-- `devMode: false`
-- `otpLength: 8` for higher-risk flows
-- `maxAttempts: 3`
-- `resendCooldown: 30` or higher
-- `hashing.secret` configured in production
-- prefer `RedisAdapter` in production to get the atomic security path
-- keep Redis private and behind authenticated network access
-
-## Release Automation
-
-Publishing on every `main` merge is not recommended for npm packages because npm versions are immutable. The safer setup is:
-- merge to `main` runs CI only
-- publish happens when you push a version tag like `v0.5.0`
-
-Required GitHub secrets:
-- `NPM_TOKEN`
+- `OTPLockedError`
 
 ## Next Roadmap
 
