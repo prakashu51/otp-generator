@@ -1,6 +1,6 @@
 import { RedisAdapter } from "../adapters/redis.adapter.js";
 import { generateNumericOtp } from "./otp.generator.js";
-import { hashOtp, verifyOtpHash } from "./otp.hash.js";
+import { buildVerificationHashes, createStoredOtpHash, verifyOtpHash } from "./otp.hash.js";
 import type {
   GenerateOTPInput,
   GenerateOTPResult,
@@ -49,7 +49,7 @@ export class OTPManager {
     const rateLimitKey = buildRateLimitKey(normalizedInput);
     const cooldownKey = buildCooldownKey(normalizedInput);
     const otp = generateNumericOtp(this.options.otpLength);
-    const hashedOtp = hashOtp(otp);
+    const storedHash = createStoredOtpHash(otp, normalizedInput, this.options.hashing);
 
     if (this.options.store instanceof RedisAdapter) {
       const atomicResult = await this.options.store.generateOtpAtomically({
@@ -57,7 +57,7 @@ export class OTPManager {
         attemptsKey,
         rateLimitKey,
         cooldownKey,
-        hashedOtp,
+        hashedOtp: storedHash,
         ttl: this.options.ttl,
         rateWindow: this.options.rateLimit?.window,
         rateMax: this.options.rateLimit?.max,
@@ -90,7 +90,7 @@ export class OTPManager {
 
     await assertWithinRateLimit(this.options.store, rateLimitKey, this.options.rateLimit);
 
-    await this.options.store.set(otpKey, hashedOtp, this.options.ttl);
+    await this.options.store.set(otpKey, storedHash, this.options.ttl);
     await this.options.store.del(attemptsKey);
 
     if (this.options.resendCooldown) {
@@ -116,12 +116,17 @@ export class OTPManager {
 
     const otpKey = buildOtpKey(normalizedInput);
     const attemptsKey = buildAttemptsKey(normalizedInput);
+    const candidateHashes = buildVerificationHashes(
+      input.otp,
+      normalizedInput,
+      this.options.hashing,
+    );
 
     if (this.options.store instanceof RedisAdapter) {
       const atomicResult = await this.options.store.verifyOtpAtomically({
         otpKey,
         attemptsKey,
-        providedHash: hashOtp(input.otp),
+        candidateHashes,
         ttl: this.options.ttl,
         maxAttempts: this.options.maxAttempts,
       });
@@ -149,7 +154,7 @@ export class OTPManager {
       throw new OTPExpiredError();
     }
 
-    const isValid = verifyOtpHash(input.otp, storedHash);
+    const isValid = verifyOtpHash(input.otp, normalizedInput, storedHash, this.options.hashing);
 
     if (!isValid) {
       const attempts = await this.options.store.increment(attemptsKey, this.options.ttl);
@@ -222,6 +227,27 @@ function validateManagerOptions(options: OTPManagerOptions): void {
       throw new TypeError(
         "identifierNormalization.preserveCaseFor must be an array of non-empty strings.",
       );
+    }
+  }
+
+  if (options.hashing) {
+    if (options.hashing.secret !== undefined && !options.hashing.secret.trim()) {
+      throw new TypeError("hashing.secret must be a non-empty string when provided.");
+    }
+
+    if (
+      options.hashing.previousSecrets !== undefined &&
+      (!Array.isArray(options.hashing.previousSecrets) ||
+        options.hashing.previousSecrets.some((secret) => !secret || !secret.trim()))
+    ) {
+      throw new TypeError("hashing.previousSecrets must contain only non-empty strings.");
+    }
+
+    if (
+      options.hashing.allowLegacyVerify !== undefined &&
+      typeof options.hashing.allowLegacyVerify !== "boolean"
+    ) {
+      throw new TypeError("hashing.allowLegacyVerify must be a boolean.");
     }
   }
 }

@@ -90,14 +90,17 @@ class FakeRedisClient {
     arguments: string[];
   }): string {
     const [otpKey, attemptsKey] = options.keys;
-    const [providedHash, ttl, maxAttempts] = options.arguments;
+    const candidateCount = Number(options.arguments[0]);
+    const candidateHashes = options.arguments.slice(1, candidateCount + 1);
+    const ttl = Number(options.arguments[candidateCount + 1]);
+    const maxAttempts = Number(options.arguments[candidateCount + 2]);
     const storedHash = this.getSync(otpKey);
 
     if (!storedHash) {
       return "expired";
     }
 
-    if (storedHash === providedHash) {
+    if (candidateHashes.includes(storedHash)) {
       this.storage.delete(otpKey);
       this.storage.delete(attemptsKey);
       return "verified";
@@ -106,10 +109,10 @@ class FakeRedisClient {
     const attempts = this.incrSync(attemptsKey);
 
     if (attempts === 1) {
-      this.expireSync(attemptsKey, Number(ttl));
+      this.expireSync(attemptsKey, ttl);
     }
 
-    if (attempts >= Number(maxAttempts)) {
+    if (attempts >= maxAttempts) {
       this.storage.delete(otpKey);
       this.storage.delete(attemptsKey);
       return "max_attempts";
@@ -172,6 +175,9 @@ test("redis atomic verify prevents double-success race conditions", async () => 
     ttl: 30,
     maxAttempts: 3,
     devMode: true,
+    hashing: {
+      secret: "current-secret",
+    },
   });
 
   const generated = await manager.generate({
@@ -211,6 +217,9 @@ test("redis atomic generate enforces resend cooldown", async () => {
     maxAttempts: 3,
     resendCooldown: 60,
     devMode: true,
+    hashing: {
+      secret: "current-secret",
+    },
   });
 
   await manager.generate({
@@ -239,6 +248,9 @@ test("redis atomic generate enforces rate limits", async () => {
       max: 1,
     },
     devMode: true,
+    hashing: {
+      secret: "current-secret",
+    },
   });
 
   await manager.generate({
@@ -255,4 +267,42 @@ test("redis atomic generate enforces rate limits", async () => {
     }),
     OTPRateLimitExceededError,
   );
+});
+
+test("redis atomic verify supports rotated secrets", async () => {
+  const client = new FakeRedisClient();
+  const oldManager = new OTPManager({
+    store: new RedisAdapter(client),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hashing: {
+      secret: "old-secret",
+    },
+  });
+
+  const generated = await oldManager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const rotatedManager = new OTPManager({
+    store: new RedisAdapter(client),
+    ttl: 30,
+    maxAttempts: 3,
+    hashing: {
+      secret: "new-secret",
+      previousSecrets: ["old-secret"],
+    },
+  });
+
+  const verified = await rotatedManager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp as string,
+  });
+
+  assert.equal(verified, true);
 });

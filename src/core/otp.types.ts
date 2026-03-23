@@ -23,6 +23,12 @@ export interface IdentifierNormalizationConfig {
   preserveCaseFor?: OTPChannel[];
 }
 
+export interface OTPHashingOptions {
+  secret?: string;
+  previousSecrets?: string[];
+  allowLegacyVerify?: boolean;
+}
+
 export interface OTPManagerOptions {
   store: StoreAdapter;
   ttl: number;
@@ -32,6 +38,7 @@ export interface OTPManagerOptions {
   otpLength?: number;
   resendCooldown?: number;
   identifierNormalization?: IdentifierNormalizationConfig;
+  hashing?: OTPHashingOptions;
 }
 
 export interface GenerateOTPResult {

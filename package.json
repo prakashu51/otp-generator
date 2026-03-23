@@ -1,6 +1,6 @@
 {
   "name": "redis-otp-manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lightweight, Redis-backed OTP manager for Node.js apps",
   "repository": {
     "type": "git",
@@ -37,7 +37,7 @@
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/prepare-cjs.cjs",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "tsx --test test/*.test.ts",
     "check": "npm run build && npm run test",
     "prepublishOnly": "npm run build"
   },
@@ -91,3 +91,4 @@
     "typescript": "^5.8.0"
   }
 }
+

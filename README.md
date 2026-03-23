@@ -7,7 +7,9 @@ Lightweight, Redis-backed OTP manager for Node.js and NestJS apps.
 This package currently includes:
 - OTP generation
 - OTP verification
-- SHA-256 OTP hashing
+- Keyed HMAC support with app secret configuration
+- Secret rotation support for verification
+- Legacy SHA-256 verification compatibility for migrations
 - Redis-compatible storage adapter
 - In-memory adapter for tests
 - Intent-aware key strategy
@@ -37,20 +39,6 @@ This package supports both:
 - ESM imports
 - CommonJS/Nest `ts-node/register` style resolution
 
-ESM:
-
-```ts
-import { OTPManager } from "redis-otp-manager";
-import { OTPModule } from "redis-otp-manager/nest";
-```
-
-CommonJS:
-
-```js
-const { OTPManager } = require("redis-otp-manager");
-const { OTPModule } = require("redis-otp-manager/nest");
-```
-
 ## Quality Checks
 
 ```bash
@@ -74,35 +62,52 @@ const otp = new OTPManager({
     max: 3,
   },
   devMode: false,
-});
-
-const generated = await otp.generate({
-  type: "email",
-  identifier: "abc@gmail.com",
-  intent: "login",
-});
-
-await otp.verify({
-  type: "email",
-  identifier: "abc@gmail.com",
-  intent: "login",
-  otp: generated.otp ?? "123456",
+  hashing: {
+    secret: process.env.OTP_HMAC_SECRET,
+  },
 });
 ```
 
+## Cryptographic Hardening
+
+When `hashing.secret` is configured, new OTPs are stored using keyed HMAC instead of plain SHA-256.
+
+```ts
+const otp = new OTPManager({
+  store: new RedisAdapter(redisClient),
+  ttl: 300,
+  maxAttempts: 3,
+  hashing: {
+    secret: process.env.OTP_HMAC_SECRET,
+    previousSecrets: [process.env.OTP_PREVIOUS_SECRET ?? ""].filter(Boolean),
+    allowLegacyVerify: true,
+  },
+});
+```
+
+Recommended migration strategy:
+- deploy `hashing.secret`
+- keep `allowLegacyVerify: true` during migration
+- optionally add `previousSecrets` during secret rotation
+- after old in-flight OTPs naturally expire, you can disable legacy verification if desired
+
+Secure secret management guidance:
+- store secrets in environment variables or your secret manager
+- never hardcode secrets in source control
+- rotate secrets deliberately and keep the previous secret only as long as needed
+- use different secrets across environments
+
 ## Production Security Notes
 
-When you use `RedisAdapter`, the package now takes the Redis-specific atomic path for:
+When you use `RedisAdapter`, the package takes the Redis-specific atomic path for:
 - OTP generation plus rate-limit/cooldown checks
 - OTP verification plus attempt tracking and OTP deletion
 
-That prevents the most important race condition in earlier versions where two parallel correct verification requests could both succeed.
+That prevents the most important race condition from earlier versions where two parallel correct verification requests could both succeed.
 
 Simpler adapters like `MemoryAdapter` intentionally stay on the non-atomic fallback path to keep tests and local development lightweight.
 
 ## NestJS
-
-Import the Nest integration from the dedicated subpath so non-Nest users do not pull Nest dependencies unless they need them.
 
 ```ts
 import { Module } from "@nestjs/common";
@@ -123,39 +128,14 @@ const redisClient = createClient({ url: process.env.REDIS_URL });
         window: 60,
         max: 3,
       },
+      hashing: {
+        secret: process.env.OTP_HMAC_SECRET,
+      },
       isGlobal: true,
     }),
   ],
 })
 export class AppModule {}
-```
-
-Async setup is also supported:
-
-```ts
-OTPModule.forRootAsync({
-  isGlobal: true,
-  inject: [ConfigService],
-  useFactory: (config: ConfigService) => ({
-    store: new RedisAdapter(createClient({ url: config.getOrThrow("REDIS_URL") })),
-    ttl: 300,
-    maxAttempts: 5,
-    resendCooldown: 45,
-  }),
-});
-```
-
-Inject in services:
-
-```ts
-import { Injectable } from "@nestjs/common";
-import { OTPManager } from "redis-otp-manager";
-import { InjectOTPManager } from "redis-otp-manager/nest";
-
-@Injectable()
-export class AuthService {
-  constructor(@InjectOTPManager() private readonly otpManager: OTPManager) {}
-}
 ```
 
 ## API
@@ -179,47 +159,15 @@ type OTPManagerOptions = {
     lowercase?: boolean;
     preserveCaseFor?: string[];
   };
+  hashing?: {
+    secret?: string;
+    previousSecrets?: string[];
+    allowLegacyVerify?: boolean;
+  };
 };
 ```
 
-Normalization is backward-compatible and conservative by default:
-- identifiers are trimmed
-- identifiers are lowercased for most channels
-- `sms` and `token` preserve case by default
-
-### `generate(input)`
-
-```ts
-const result = await otp.generate({
-  type: "email",
-  identifier: "abc@gmail.com",
-  intent: "login",
-});
-```
-
-Returns:
-
-```ts
-{
-  expiresIn: 300,
-  otp?: "123456"
-}
-```
-
-### `verify(input)`
-
-```ts
-await otp.verify({
-  type: "email",
-  identifier: "abc@gmail.com",
-  intent: "login",
-  otp: "123456",
-});
-```
-
-Returns `true` or throws a typed error.
-
-## Errors
+### Errors
 
 - `OTPRateLimitExceededError`
 - `OTPExpiredError`
@@ -232,9 +180,10 @@ Returns `true` or throws a typed error.
 - `devMode: false`
 - `otpLength: 8` for higher-risk flows
 - `maxAttempts: 3`
-- `resendCooldown: 30` or higher to reduce abuse
-- keep Redis private and behind authenticated network access
+- `resendCooldown: 30` or higher
+- `hashing.secret` configured in production
 - prefer `RedisAdapter` in production to get the atomic security path
+- keep Redis private and behind authenticated network access
 
 ## Key Design
 
@@ -249,7 +198,7 @@ cooldown:{intent}:{type}:{identifier}
 
 Publishing on every `main` merge is not recommended for npm packages because npm versions are immutable. The safer setup is:
 - merge to `main` runs CI only
-- publish happens when you push a version tag like `v0.3.0`
+- publish happens when you push a version tag like `v0.4.0`
 
 Required GitHub secrets:
 - `NPM_TOKEN`
@@ -257,12 +206,12 @@ Required GitHub secrets:
 Tag-based publish:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 ## Next Roadmap
 
-- keyed HMAC for OTP hashing
 - hooks/events
 - analytics and observability
+- delivery helper integrations
