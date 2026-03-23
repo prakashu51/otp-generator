@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   OTPExpiredError,
+  OTPLockedError,
   OTPManager,
   OTPRateLimitExceededError,
   OTPResendCooldownError,
@@ -16,6 +17,7 @@ interface RecordValue {
 
 class FakeRedisClient {
   private readonly storage = new Map<string, RecordValue>();
+  private readonly sortedWindows = new Map<string, number[]>();
 
   async get(key: string): Promise<string | null> {
     return this.getSync(key);
@@ -27,6 +29,7 @@ class FakeRedisClient {
 
   async del(key: string): Promise<void> {
     this.storage.delete(key);
+    this.sortedWindows.delete(key);
   }
 
   async incr(key: string): Promise<number> {
@@ -41,37 +44,49 @@ class FakeRedisClient {
     _script: string,
     options: { keys: string[]; arguments: string[] },
   ): Promise<string | null> {
-    if (options.keys.length === 4) {
+    if (options.keys.length === 5) {
       return this.atomicGenerate(options);
     }
 
-    if (options.keys.length === 2) {
+    if (options.keys.length === 3) {
       return this.atomicVerify(options);
     }
 
     return null;
   }
 
-  private atomicGenerate(options: {
-    keys: string[];
-    arguments: string[];
-  }): string {
-    const [otpKey, attemptsKey, rateLimitKey, cooldownKey] = options.keys;
-    const [hashedOtp, ttl, rateWindow, rateMax, resendCooldown] = options.arguments;
+  private atomicGenerate(options: { keys: string[]; arguments: string[] }): string {
+    const [otpKey, attemptsKey, rateLimitKey, cooldownKey, lockKey] = options.keys;
+    const [hashedOtp, ttl, rateWindow, rateMax, resendCooldown, checkLock, algorithm, nowMs] =
+      options.arguments;
+
+    if (checkLock === "1" && this.getSync(lockKey)) {
+      return "locked";
+    }
 
     if (resendCooldown && this.getSync(cooldownKey)) {
       return "cooldown";
     }
 
     if (rateWindow && rateMax) {
-      const nextCount = this.incrSync(rateLimitKey);
-
-      if (nextCount === 1) {
-        this.expireSync(rateLimitKey, Number(rateWindow));
-      }
-
-      if (nextCount > Number(rateMax)) {
-        return "rate_limit";
+      if (algorithm === "sliding_window") {
+        const now = Number(nowMs);
+        const windowStart = now - Number(rateWindow) * 1000;
+        const entries = (this.sortedWindows.get(rateLimitKey) ?? []).filter((value) => value > windowStart);
+        if (entries.length >= Number(rateMax)) {
+          this.sortedWindows.set(rateLimitKey, entries);
+          return "rate_limit";
+        }
+        entries.push(now);
+        this.sortedWindows.set(rateLimitKey, entries);
+      } else {
+        const nextCount = this.incrSync(rateLimitKey);
+        if (nextCount === 1) {
+          this.expireSync(rateLimitKey, Number(rateWindow));
+        }
+        if (nextCount > Number(rateMax)) {
+          return "rate_limit";
+        }
       }
     }
 
@@ -85,16 +100,20 @@ class FakeRedisClient {
     return "ok";
   }
 
-  private atomicVerify(options: {
-    keys: string[];
-    arguments: string[];
-  }): string {
-    const [otpKey, attemptsKey] = options.keys;
-    const candidateCount = Number(options.arguments[0]);
-    const candidateHashes = options.arguments.slice(1, candidateCount + 1);
-    const ttl = Number(options.arguments[candidateCount + 1]);
-    const maxAttempts = Number(options.arguments[candidateCount + 2]);
+  private atomicVerify(options: { keys: string[]; arguments: string[] }): string {
+    const [otpKey, attemptsKey, lockKey] = options.keys;
+    const checkLock = options.arguments[0];
+    const candidateCount = Number(options.arguments[1]);
+    const candidateHashes = options.arguments.slice(2, candidateCount + 2);
+    const ttl = Number(options.arguments[candidateCount + 2]);
+    const maxAttempts = Number(options.arguments[candidateCount + 3]);
+    const lockoutSeconds = options.arguments[candidateCount + 4];
+    const lockoutAfter = options.arguments[candidateCount + 5];
     const storedHash = this.getSync(otpKey);
+
+    if (checkLock === "1" && this.getSync(lockKey)) {
+      return "locked";
+    }
 
     if (!storedHash) {
       return "expired";
@@ -110,6 +129,15 @@ class FakeRedisClient {
 
     if (attempts === 1) {
       this.expireSync(attemptsKey, ttl);
+    }
+
+    if (lockoutAfter && attempts >= Number(lockoutAfter)) {
+      if (lockoutSeconds) {
+        this.setSync(lockKey, "1", Number(lockoutSeconds));
+      }
+      this.storage.delete(otpKey);
+      this.storage.delete(attemptsKey);
+      return "locked";
     }
 
     if (attempts >= maxAttempts) {
@@ -305,4 +333,66 @@ test("redis atomic verify supports rotated secrets", async () => {
   });
 
   assert.equal(verified, true);
+});
+
+test("redis sliding window rate limiting works", async () => {
+  const manager = new OTPManager({
+    store: new RedisAdapter(new FakeRedisClient()),
+    ttl: 30,
+    maxAttempts: 3,
+    rateLimit: {
+      window: 60,
+      max: 1,
+      algorithm: "sliding_window",
+    },
+    devMode: true,
+  });
+
+  await manager.generate({ type: "email", identifier: "user@example.com", intent: "login" });
+
+  await assert.rejects(
+    manager.generate({ type: "email", identifier: "user@example.com", intent: "login" }),
+    OTPRateLimitExceededError,
+  );
+});
+
+test("redis lockout blocks subsequent generate and verify", async () => {
+  const manager = new OTPManager({
+    store: new RedisAdapter(new FakeRedisClient()),
+    ttl: 30,
+    maxAttempts: 3,
+    lockout: {
+      seconds: 60,
+      afterAttempts: 1,
+      appliesTo: "both",
+    },
+    devMode: true,
+  });
+
+  await manager.generate({ type: "email", identifier: "user@example.com", intent: "login" });
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPLockedError,
+  );
+
+  await assert.rejects(
+    manager.generate({ type: "email", identifier: "user@example.com", intent: "login" }),
+    OTPLockedError,
+  );
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPLockedError,
+  );
 });

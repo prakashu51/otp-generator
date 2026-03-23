@@ -37,3 +37,9 @@ export class OTPResendCooldownError extends OTPError {
     super(message, "OTP_RESEND_COOLDOWN");
   }
 }
+
+export class OTPLockedError extends OTPError {
+  constructor(message = "OTP operations are temporarily locked for this target.") {
+    super(message, "OTP_LOCKED");
+  }
+}

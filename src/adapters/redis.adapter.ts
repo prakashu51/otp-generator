@@ -1,4 +1,4 @@
-import type { StoreAdapter } from "../core/otp.types.js";
+import type { OTPRateLimitAlgorithm, StoreAdapter } from "../core/otp.types.js";
 
 export interface RedisLikeClient {
   get(key: string): Promise<string | null>;
@@ -17,25 +17,40 @@ export interface AtomicGenerateParams {
   attemptsKey: string;
   rateLimitKey: string;
   cooldownKey: string;
+  lockKey: string;
   hashedOtp: string;
   ttl: number;
   rateWindow?: number;
   rateMax?: number;
+  rateAlgorithm?: OTPRateLimitAlgorithm;
+  rateNonce?: string;
   resendCooldown?: number;
+  checkLock?: boolean;
 }
 
 export interface AtomicVerifyParams {
   otpKey: string;
   attemptsKey: string;
+  lockKey: string;
   candidateHashes: string[];
   ttl: number;
   maxAttempts: number;
+  checkLock?: boolean;
+  lockoutSeconds?: number;
+  lockoutAfter?: number;
 }
 
-export type AtomicGenerateResult = "ok" | "rate_limit" | "cooldown";
-export type AtomicVerifyResult = "verified" | "expired" | "invalid" | "max_attempts";
+export type AtomicGenerateResult = "ok" | "rate_limit" | "cooldown" | "locked";
+export type AtomicVerifyResult = "verified" | "expired" | "invalid" | "max_attempts" | "locked";
 
 const ATOMIC_GENERATE_SCRIPT = `
+if ARGV[6] == '1' then
+  local lockExists = redis.call('GET', KEYS[5])
+  if lockExists then
+    return 'locked'
+  end
+end
+
 if ARGV[5] ~= '' then
   local cooldownExists = redis.call('GET', KEYS[4])
   if cooldownExists then
@@ -44,12 +59,24 @@ if ARGV[5] ~= '' then
 end
 
 if ARGV[3] ~= '' and ARGV[4] ~= '' then
-  local nextCount = redis.call('INCR', KEYS[3])
-  if nextCount == 1 then
+  if ARGV[7] == 'sliding_window' then
+    local now = tonumber(ARGV[8])
+    local windowStart = now - (tonumber(ARGV[3]) * 1000)
+    redis.call('ZREMRANGEBYSCORE', KEYS[3], 0, windowStart)
+    local count = redis.call('ZCARD', KEYS[3])
+    if count >= tonumber(ARGV[4]) then
+      return 'rate_limit'
+    end
+    redis.call('ZADD', KEYS[3], now, ARGV[9])
     redis.call('EXPIRE', KEYS[3], tonumber(ARGV[3]))
-  end
-  if nextCount > tonumber(ARGV[4]) then
-    return 'rate_limit'
+  else
+    local nextCount = redis.call('INCR', KEYS[3])
+    if nextCount == 1 then
+      redis.call('EXPIRE', KEYS[3], tonumber(ARGV[3]))
+    end
+    if nextCount > tonumber(ARGV[4]) then
+      return 'rate_limit'
+    end
   end
 end
 
@@ -64,25 +91,43 @@ return 'ok'
 `;
 
 const ATOMIC_VERIFY_SCRIPT = `
+if ARGV[1] == '1' then
+  local lockExists = redis.call('GET', KEYS[3])
+  if lockExists then
+    return 'locked'
+  end
+end
+
 local storedHash = redis.call('GET', KEYS[1])
 if not storedHash then
   return 'expired'
 end
 
-local candidateCount = tonumber(ARGV[1])
+local candidateCount = tonumber(ARGV[2])
 for index = 1, candidateCount do
-  if storedHash == ARGV[index + 1] then
+  if storedHash == ARGV[index + 2] then
     redis.call('DEL', KEYS[1])
     redis.call('DEL', KEYS[2])
     return 'verified'
   end
 end
 
-local ttlIndex = candidateCount + 2
-local maxAttemptsIndex = candidateCount + 3
+local ttlIndex = candidateCount + 3
+local maxAttemptsIndex = candidateCount + 4
+local lockoutSecondsIndex = candidateCount + 5
+local lockoutAfterIndex = candidateCount + 6
 local attempts = redis.call('INCR', KEYS[2])
 if attempts == 1 then
   redis.call('EXPIRE', KEYS[2], tonumber(ARGV[ttlIndex]))
+end
+
+if ARGV[lockoutAfterIndex] ~= '' and attempts >= tonumber(ARGV[lockoutAfterIndex]) then
+  if ARGV[lockoutSecondsIndex] ~= '' then
+    redis.call('SET', KEYS[3], '1', 'EX', tonumber(ARGV[lockoutSecondsIndex]))
+  end
+  redis.call('DEL', KEYS[1])
+  redis.call('DEL', KEYS[2])
+  return 'locked'
 end
 
 if attempts >= tonumber(ARGV[maxAttemptsIndex]) then
@@ -127,17 +172,32 @@ export class RedisAdapter implements StoreAdapter {
     }
 
     const result = await this.client.eval(ATOMIC_GENERATE_SCRIPT, {
-      keys: [params.otpKey, params.attemptsKey, params.rateLimitKey, params.cooldownKey],
+      keys: [
+        params.otpKey,
+        params.attemptsKey,
+        params.rateLimitKey,
+        params.cooldownKey,
+        params.lockKey,
+      ],
       arguments: [
         params.hashedOtp,
         String(params.ttl),
         params.rateWindow ? String(params.rateWindow) : "",
         params.rateMax ? String(params.rateMax) : "",
         params.resendCooldown ? String(params.resendCooldown) : "",
+        params.checkLock ? "1" : "0",
+        params.rateAlgorithm ?? "fixed_window",
+        String(Date.now()),
+        params.rateNonce ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       ],
     });
 
-    if (result === "ok" || result === "rate_limit" || result === "cooldown") {
+    if (
+      result === "ok" ||
+      result === "rate_limit" ||
+      result === "cooldown" ||
+      result === "locked"
+    ) {
       return result;
     }
 
@@ -150,12 +210,15 @@ export class RedisAdapter implements StoreAdapter {
     }
 
     const result = await this.client.eval(ATOMIC_VERIFY_SCRIPT, {
-      keys: [params.otpKey, params.attemptsKey],
+      keys: [params.otpKey, params.attemptsKey, params.lockKey],
       arguments: [
+        params.checkLock ? "1" : "0",
         String(params.candidateHashes.length),
         ...params.candidateHashes,
         String(params.ttl),
         String(params.maxAttempts),
+        params.lockoutSeconds ? String(params.lockoutSeconds) : "",
+        params.lockoutAfter ? String(params.lockoutAfter) : "",
       ],
     });
 
@@ -163,7 +226,8 @@ export class RedisAdapter implements StoreAdapter {
       result === "verified" ||
       result === "expired" ||
       result === "invalid" ||
-      result === "max_attempts"
+      result === "max_attempts" ||
+      result === "locked"
     ) {
       return result;
     }
@@ -171,4 +235,3 @@ export class RedisAdapter implements StoreAdapter {
     return null;
   }
 }
-

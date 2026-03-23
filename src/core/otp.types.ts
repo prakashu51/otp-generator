@@ -1,5 +1,8 @@
 export type OTPChannel = "email" | "sms" | "token" | (string & {});
 export type OTPMetadata = Record<string, unknown>;
+export type OTPThrottleScope = "identifier" | "intent" | "channel" | "intent_channel";
+export type OTPRateLimitAlgorithm = "fixed_window" | "sliding_window";
+export type OTPLockoutAppliesTo = "verify" | "generate" | "both";
 
 export interface OTPPayload {
   type: OTPChannel;
@@ -17,6 +20,20 @@ export interface VerifyOTPInput extends OTPPayload {
 export interface RateLimitConfig {
   window: number;
   max: number;
+  scope?: OTPThrottleScope;
+  algorithm?: OTPRateLimitAlgorithm;
+}
+
+export interface OTPCooldownConfig {
+  seconds: number;
+  scope?: OTPThrottleScope;
+}
+
+export interface OTPLockoutConfig {
+  seconds: number;
+  afterAttempts: number;
+  appliesTo?: OTPLockoutAppliesTo;
+  scope?: OTPThrottleScope;
 }
 
 export interface IdentifierNormalizationConfig {
@@ -55,15 +72,22 @@ export interface OTPFailedEvent extends OTPEventContext {
 
 export interface OTPLockedEvent extends OTPEventContext {
   maxAttempts: number;
+  operation: "generate" | "verify";
+  lockoutSeconds?: number;
+  appliesTo?: OTPLockoutAppliesTo;
+  scope?: OTPThrottleScope;
 }
 
 export interface OTPRateLimitedEvent extends OTPEventContext {
   window: number;
   max: number;
+  scope: OTPThrottleScope;
+  algorithm: OTPRateLimitAlgorithm;
 }
 
 export interface OTPCooldownBlockedEvent extends OTPEventContext {
   resendCooldown: number;
+  scope: OTPThrottleScope;
 }
 
 export interface OTPHookErrorContext {
@@ -99,6 +123,8 @@ export interface OTPManagerOptions {
   ttl: number;
   maxAttempts: number;
   rateLimit?: RateLimitConfig;
+  cooldown?: OTPCooldownConfig;
+  lockout?: OTPLockoutConfig;
   devMode?: boolean;
   otpLength?: number;
   resendCooldown?: number;

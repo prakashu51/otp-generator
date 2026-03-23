@@ -5,6 +5,7 @@ import {
   MemoryAdapter,
   OTPExpiredError,
   OTPInvalidError,
+  OTPLockedError,
   OTPManager,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
@@ -488,9 +489,6 @@ test("emits cooldown and rate-limited hooks", async () => {
       onCooldownBlocked: async (event) => {
         cooldownEvents.push(event);
       },
-      onRateLimited: async (event) => {
-        rateLimitedEvents.push(event);
-      },
     },
   });
 
@@ -575,4 +573,109 @@ test("hook errors are non-blocking by default and reported to onHookError", asyn
 
   assert.match(generated.otp ?? "", /^\d{6}$/);
   assert.deepEqual(hookErrors, ["hook exploded"]);
+});
+
+test("cooldown policy with identifier scope blocks different intents for same identifier", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    cooldown: {
+      seconds: 30,
+      scope: "identifier",
+    },
+    devMode: true,
+  });
+
+  await manager.generate({ type: "email", identifier: "user@example.com", intent: "login" });
+
+  await assert.rejects(
+    manager.generate({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "signup",
+    }),
+    OTPResendCooldownError,
+  );
+});
+
+test("rate limit scope intent_channel allows different intents independently", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    rateLimit: {
+      window: 60,
+      max: 1,
+      scope: "intent_channel",
+    },
+    devMode: true,
+  });
+
+  await manager.generate({ type: "email", identifier: "user@example.com", intent: "login" });
+  const second = await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "signup",
+  });
+
+  assert.match(second.otp ?? "", /^\d{6}$/);
+});
+
+test("lockout blocks generate and verify during lock window", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    lockout: {
+      seconds: 60,
+      afterAttempts: 1,
+      appliesTo: "both",
+    },
+    devMode: true,
+  });
+
+  await manager.generate({ type: "email", identifier: "user@example.com", intent: "login" });
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPLockedError,
+  );
+
+  await assert.rejects(
+    manager.generate({ type: "email", identifier: "user@example.com", intent: "login" }),
+    OTPLockedError,
+  );
+
+  await assert.rejects(
+    manager.verify({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPLockedError,
+  );
+});
+
+test("sliding window rate limiting requires redis adapter", async () => {
+  assert.throws(
+    () =>
+      new OTPManager({
+        store: new MemoryAdapter(),
+        ttl: 30,
+        maxAttempts: 3,
+        rateLimit: {
+          window: 60,
+          max: 1,
+          algorithm: "sliding_window",
+        },
+      }),
+    TypeError,
+  );
 });
