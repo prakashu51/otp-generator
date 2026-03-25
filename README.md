@@ -22,6 +22,14 @@ This package currently includes:
 - NestJS module integration via `redis-otp-manager/nest`
 - Dual package support for ESM and CommonJS consumers
 
+## Reliability And Compatibility
+
+`v0.7.0` adds production-confidence checks around the existing feature set:
+- real Redis integration tests against a live Redis server
+- parallel generate and verify regression coverage
+- build-output smoke checks for both ESM and CommonJS consumers
+- Nest integration smoke coverage in CI
+- Redis-backed CI job to validate TTL, lockout, cooldown, and sliding-window behavior on a real server
 ## Install
 
 ```bash
@@ -167,8 +175,5 @@ type OTPManagerOptions = {
 - `OTPResendCooldownError`
 - `OTPLockedError`
 
-## Next Roadmap
+## Next Roadmap`r`n`r`n- documentation and migration polish toward v1.0.0`r`n- production examples for NestJS, Express, and plain Node`r`n- optional delivery helpers for email links and magic-link style verification
 
-- analytics and observability integrations
-- delivery helper integrations
-- more advanced audit persistence adapters
