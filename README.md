@@ -187,7 +187,7 @@ Version-to-version migration notes live in [docs/migrations.md](./docs/migration
 
 ## Reliability And Compatibility
 
-`v0.7.0` added:
+Current package validation includes:
 - real Redis integration tests against a live Redis server
 - Redis-backed CI validation for TTL, lockout, cooldown, and sliding-window behavior
 - ESM and CommonJS smoke checks against the built package output
@@ -207,5 +207,6 @@ The package is currently validated for:
 - final release-candidate cleanup and packaging confidence
 - optional delivery helpers for email links and magic-link style verification
 - post-1.0.0 token and verification-link flows
+
 
 
