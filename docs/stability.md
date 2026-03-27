@@ -2,7 +2,7 @@
 
 ## Stable public surface
 
-The following package entry points are intended to remain stable into `v1.0.0`:
+The following package entry points are stable as of `v1.0.0`:
 - `OTPManager`
 - `RedisAdapter`
 - `MemoryAdapter`
@@ -36,3 +36,4 @@ These are still supported and not removed in `0.9.0`:
 - legacy SHA-256 verification during HMAC migration
 
 They are still valid, but newer policy-based configuration is recommended for new integrations.
+

@@ -146,7 +146,9 @@ type OTPManagerOptions = {
 
 ## Stable API
 
-The following public surface is intended to remain stable into `v1.0.0`:
+`v1.0.0` is the first stable production release of `redis-otp-manager`.
+
+The following public surface is considered stable:
 - `OTPManager`
 - `RedisAdapter`
 - `MemoryAdapter`
@@ -202,11 +204,12 @@ The package is currently validated for:
 - NestJS provider smoke coverage
 - ESM and CommonJS package smoke checks
 
-## Roadmap Toward v1.0.0
+## Post-1.0.0 Roadmap
 
-- final release-candidate cleanup and packaging confidence
 - optional delivery helpers for email links and magic-link style verification
-- post-1.0.0 token and verification-link flows
+- token and verification-link flows
+- additional audit and delivery adapters
+
 
 
 
