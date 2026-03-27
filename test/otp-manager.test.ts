@@ -834,3 +834,161 @@ test("startup validation guards store adapter shape and hashing rotation conflic
     /must not include hashing.secret/,
   );
 });
+
+test("generates and verifies a token successfully", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  assert.ok(generated.token);
+  assert.ok(generated.token!.length >= 32);
+
+  const verified = await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+    token: generated.token as string,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("token flow does not collide with OTP flow for the same identifier", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generatedOtp = await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const generatedToken = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  const otpVerified = await manager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generatedOtp.otp as string,
+  });
+
+  const tokenVerified = await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    token: generatedToken.token as string,
+  });
+
+  assert.equal(otpVerified, true);
+  assert.equal(tokenVerified, true);
+});
+
+test("token flow respects cooldown and rate limiting independently", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    cooldown: {
+      seconds: 30,
+      scope: "intent_channel",
+    },
+    rateLimit: {
+      window: 60,
+      max: 1,
+    },
+    devMode: true,
+  });
+
+  await manager.generateToken({
+    type: "email",
+    identifier: "token@example.com",
+    intent: "verify-email",
+  });
+
+  await assert.rejects(
+    manager.generateToken({
+      type: "email",
+      identifier: "token@example.com",
+      intent: "verify-email",
+    }),
+    OTPResendCooldownError,
+  );
+
+  const rateManager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    rateLimit: {
+      window: 60,
+      max: 1,
+    },
+    devMode: true,
+  });
+
+  await rateManager.generateToken({
+    type: "email",
+    identifier: "rate-token@example.com",
+    intent: "verify-email",
+  });
+
+  await assert.rejects(
+    rateManager.generateToken({
+      type: "email",
+      identifier: "rate-token@example.com",
+      intent: "verify-email",
+    }),
+    OTPRateLimitExceededError,
+  );
+});
+
+test("token verification uses the same max-attempt protection", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 2,
+    devMode: true,
+  });
+
+  await manager.generateToken({
+    type: "email",
+    identifier: "token-lock@example.com",
+    intent: "verify-email",
+  });
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "token-lock@example.com",
+      intent: "verify-email",
+      token: "wrong-token",
+    }),
+    OTPInvalidError,
+  );
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "token-lock@example.com",
+      intent: "verify-email",
+      token: "wrong-token",
+    }),
+    OTPMaxAttemptsExceededError,
+  );
+});

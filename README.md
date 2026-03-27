@@ -61,6 +61,7 @@ await otp.verify({
 
 ### Core flows
 - OTP generation and verification
+- verification token generation and verification
 - intent-aware keying
 - in-memory adapter for tests
 - NestJS module export via `redis-otp-manager/nest`
@@ -93,6 +94,10 @@ See [examples/nest-basic/README.md](./examples/nest-basic/README.md).
 ## Express Example
 
 See [examples/express-basic/README.md](./examples/express-basic/README.md).
+
+## Verification Link Example
+
+See [examples/node-token-link/README.md](./examples/node-token-link/README.md).
 
 ## Configuration
 
@@ -216,11 +221,31 @@ When reporting, please include:
 - adapter used (`RedisAdapter` or `MemoryAdapter`)
 - minimal reproduction steps
 - expected behavior and actual behavior
+## Token Flow
+
+Use `generateToken()` and `verifyToken()` when you want email verification links or magic-link style flows without changing the existing OTP API.
+
+```ts
+const generated = await otp.generateToken({
+  type: "email",
+  identifier: "user@example.com",
+  intent: "verify-email",
+});
+
+await otp.verifyToken({
+  type: "email",
+  identifier: "user@example.com",
+  intent: "verify-email",
+  token: generated.token ?? "",
+});
+```
+
 ## Post-1.0.0 Roadmap
 
 - optional delivery helpers for email links and magic-link style verification
-- token and verification-link flows
 - additional audit and delivery adapters
+- more delivery and token workflow helpers
+
 
 
 

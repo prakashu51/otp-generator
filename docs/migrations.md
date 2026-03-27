@@ -25,3 +25,9 @@
 ## 0.7.x to 0.8.0
 - no runtime behavior change is required.
 - this release focuses on docs, migration clarity, examples, and developer onboarding.
+
+## 1.0.x to 1.1.0
+- `generateToken()` and `verifyToken()` were added as additive APIs.
+- existing `generate()` and `verify()` behavior remains unchanged.
+- token flow uses separate Redis key namespaces to avoid collisions with OTP flow.
+

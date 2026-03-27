@@ -396,3 +396,39 @@ test("redis lockout blocks subsequent generate and verify", async () => {
     OTPLockedError,
   );
 });
+
+test("redis atomic token verify prevents double-success race conditions", async () => {
+  const manager = new OTPManager({
+    store: new RedisAdapter(new FakeRedisClient()),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hashing: {
+      secret: "current-secret",
+    },
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  const results = await Promise.allSettled([
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+  ]);
+
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+});

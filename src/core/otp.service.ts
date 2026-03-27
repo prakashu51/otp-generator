@@ -1,9 +1,12 @@
 import { RedisAdapter } from "../adapters/redis.adapter.js";
 import { generateNumericOtp } from "./otp.generator.js";
+import { generateSecureToken } from "./token.generator.js";
 import { buildVerificationHashes, createStoredOtpHash, verifyOtpHash } from "./otp.hash.js";
 import type {
   GenerateOTPInput,
   GenerateOTPResult,
+  GenerateTokenInput,
+  GenerateTokenResult,
   OTPCooldownBlockedEvent,
   OTPCooldownConfig,
   OTPEventContext,
@@ -14,11 +17,11 @@ import type {
   OTPLockoutConfig,
   OTPManagerOptions,
   OTPRateLimitedEvent,
-  OTPRateLimitAlgorithm,
   RateLimitConfig,
   OTPThrottleScope,
   OTPVerifiedEvent,
   VerifyOTPInput,
+  VerifyTokenInput,
 } from "./otp.types.js";
 import {
   OTPExpiredError,
@@ -34,9 +37,24 @@ import {
   buildLockKey,
   buildOtpKey,
   buildRateLimitKey,
+  buildTokenAttemptsKey,
+  buildTokenCooldownKey,
+  buildTokenKey,
+  buildTokenLockKey,
+  buildTokenRateLimitKey,
 } from "../utils/key-builder.js";
 import { normalizePayloadIdentifier } from "../utils/identifier-normalizer.js";
 import { assertWithinRateLimit } from "../utils/rate-limiter.js";
+
+interface SecretKeySet {
+  secretKey: string;
+  attemptsKey: string;
+  rateLimitKey: string;
+  cooldownKey: string;
+  lockKey: string;
+}
+
+type SecretKind = "otp" | "token";
 
 export class OTPManager {
   private readonly options: Required<Pick<OTPManagerOptions, "ttl" | "maxAttempts">> &
@@ -59,30 +77,40 @@ export class OTPManager {
   }
 
   async generate(input: GenerateOTPInput): Promise<GenerateOTPResult> {
+    return this.generateSecretFlow("otp", input, () => generateNumericOtp(this.options.otpLength), "otp");
+  }
+
+  async verify(input: VerifyOTPInput): Promise<true> {
+    return this.verifySecretFlow("otp", input, input.otp);
+  }
+
+  async generateToken(input: GenerateTokenInput): Promise<GenerateTokenResult> {
+    return this.generateSecretFlow("token", input, () => generateSecureToken(), "token");
+  }
+
+  async verifyToken(input: VerifyTokenInput): Promise<true> {
+    return this.verifySecretFlow("token", input, input.token);
+  }
+
+  private async generateSecretFlow(
+    kind: SecretKind,
+    input: GenerateOTPInput | GenerateTokenInput,
+    generateSecret: () => string,
+    resultField: "otp" | "token",
+  ): Promise<GenerateOTPResult | GenerateTokenResult> {
     validatePayload(input);
-    const normalizedInput = normalizePayloadIdentifier(
-      input,
-      this.options.identifierNormalization,
-    );
+    const normalizedInput = normalizePayloadIdentifier(input, this.options.identifierNormalization);
     const eventContext = this.buildEventContext(input, normalizedInput.identifier);
 
     const resolvedRateLimit = this.getResolvedRateLimit();
     const resolvedCooldown = this.getResolvedCooldown();
     const resolvedLockout = this.getResolvedLockout();
-
-    const otpKey = buildOtpKey(normalizedInput);
-    const attemptsKey = buildAttemptsKey(normalizedInput);
-    const rateLimitKey = buildRateLimitKey(normalizedInput, resolvedRateLimit?.scope ?? "channel");
-    const cooldownKey = buildCooldownKey(
-      normalizedInput,
-      resolvedCooldown?.scope ?? "intent_channel",
-    );
-    const lockKey = buildLockKey(normalizedInput, resolvedLockout?.scope ?? "intent_channel");
-    const otp = generateNumericOtp(this.options.otpLength);
-    const storedHash = createStoredOtpHash(otp, normalizedInput, this.options.hashing);
+    const keys = this.buildKeys(kind, normalizedInput, resolvedRateLimit?.scope ?? "channel", resolvedCooldown?.scope ?? "intent_channel", resolvedLockout?.scope ?? "intent_channel");
+    const secret = generateSecret();
+    const storedHash = createStoredOtpHash(secret, normalizedInput, this.options.hashing);
 
     if (this.shouldCheckGenerateLock(resolvedLockout)) {
-      const locked = await this.options.store.get(lockKey);
+      const locked = await this.options.store.get(keys.lockKey);
 
       if (locked) {
         await this.emitLocked(eventContext, "generate", resolvedLockout);
@@ -92,11 +120,11 @@ export class OTPManager {
 
     if (this.options.store instanceof RedisAdapter) {
       const atomicResult = await this.options.store.generateOtpAtomically({
-        otpKey,
-        attemptsKey,
-        rateLimitKey,
-        cooldownKey,
-        lockKey,
+        otpKey: keys.secretKey,
+        attemptsKey: keys.attemptsKey,
+        rateLimitKey: keys.rateLimitKey,
+        cooldownKey: keys.cooldownKey,
+        lockKey: keys.lockKey,
         hashedOtp: storedHash,
         ttl: this.options.ttl,
         rateWindow: resolvedRateLimit?.window,
@@ -122,9 +150,9 @@ export class OTPManager {
       }
 
       if (atomicResult === "ok") {
-        const result = {
+        const result: GenerateOTPResult | GenerateTokenResult = {
           expiresIn: this.options.ttl,
-          otp: this.options.devMode ? otp : undefined,
+          [resultField]: this.options.devMode ? secret : undefined,
         };
 
         await this.emitGenerated(eventContext);
@@ -133,7 +161,7 @@ export class OTPManager {
     }
 
     if (resolvedCooldown) {
-      const cooldownActive = await this.options.store.get(cooldownKey);
+      const cooldownActive = await this.options.store.get(keys.cooldownKey);
 
       if (cooldownActive) {
         await this.emitCooldownBlocked(eventContext, resolvedCooldown);
@@ -142,7 +170,7 @@ export class OTPManager {
     }
 
     try {
-      await assertWithinRateLimit(this.options.store, rateLimitKey, resolvedRateLimit);
+      await assertWithinRateLimit(this.options.store, keys.rateLimitKey, resolvedRateLimit);
     } catch (error) {
       if (error instanceof OTPRateLimitExceededError) {
         await this.emitRateLimited(eventContext, resolvedRateLimit);
@@ -150,46 +178,41 @@ export class OTPManager {
       throw error;
     }
 
-    await this.options.store.set(otpKey, storedHash, this.options.ttl);
-    await this.options.store.del(attemptsKey);
+    await this.options.store.set(keys.secretKey, storedHash, this.options.ttl);
+    await this.options.store.del(keys.attemptsKey);
 
     if (resolvedCooldown) {
-      await this.options.store.set(cooldownKey, "1", resolvedCooldown.seconds);
+      await this.options.store.set(keys.cooldownKey, "1", resolvedCooldown.seconds);
     }
 
-    const result = {
+    const result: GenerateOTPResult | GenerateTokenResult = {
       expiresIn: this.options.ttl,
-      otp: this.options.devMode ? otp : undefined,
+      [resultField]: this.options.devMode ? secret : undefined,
     };
 
     await this.emitGenerated(eventContext);
     return result;
   }
 
-  async verify(input: VerifyOTPInput): Promise<true> {
+  private async verifySecretFlow(
+    kind: SecretKind,
+    input: VerifyOTPInput | VerifyTokenInput,
+    providedSecret: string,
+  ): Promise<true> {
     validatePayload(input);
-    const normalizedInput = normalizePayloadIdentifier(
-      input,
-      this.options.identifierNormalization,
-    );
+    const normalizedInput = normalizePayloadIdentifier(input, this.options.identifierNormalization);
     const eventContext = this.buildEventContext(input, normalizedInput.identifier);
     const resolvedLockout = this.getResolvedLockout();
 
-    if (!input.otp || !input.otp.trim()) {
-      throw new TypeError("OTP must be a non-empty string.");
+    if (!providedSecret || !providedSecret.trim()) {
+      throw new TypeError(`${kind === "otp" ? "OTP" : "token"} must be a non-empty string.`);
     }
 
-    const otpKey = buildOtpKey(normalizedInput);
-    const attemptsKey = buildAttemptsKey(normalizedInput);
-    const lockKey = buildLockKey(normalizedInput, resolvedLockout?.scope ?? "intent_channel");
-    const candidateHashes = buildVerificationHashes(
-      input.otp,
-      normalizedInput,
-      this.options.hashing,
-    );
+    const keys = this.buildKeys(kind, normalizedInput, "channel", "intent_channel", resolvedLockout?.scope ?? "intent_channel");
+    const candidateHashes = buildVerificationHashes(providedSecret, normalizedInput, this.options.hashing);
 
     if (this.shouldCheckVerifyLock(resolvedLockout)) {
-      const locked = await this.options.store.get(lockKey);
+      const locked = await this.options.store.get(keys.lockKey);
 
       if (locked) {
         await this.emitLocked(eventContext, "verify", resolvedLockout);
@@ -199,9 +222,9 @@ export class OTPManager {
 
     if (this.options.store instanceof RedisAdapter) {
       const atomicResult = await this.options.store.verifyOtpAtomically({
-        otpKey,
-        attemptsKey,
-        lockKey,
+        otpKey: keys.secretKey,
+        attemptsKey: keys.attemptsKey,
+        lockKey: keys.lockKey,
         candidateHashes,
         ttl: this.options.ttl,
         maxAttempts: this.options.maxAttempts,
@@ -236,29 +259,29 @@ export class OTPManager {
       }
     }
 
-    const storedHash = await this.options.store.get(otpKey);
+    const storedHash = await this.options.store.get(keys.secretKey);
 
     if (!storedHash) {
       await this.emitFailed(eventContext, "expired");
       throw new OTPExpiredError();
     }
 
-    const isValid = verifyOtpHash(input.otp, normalizedInput, storedHash, this.options.hashing);
+    const isValid = verifyOtpHash(providedSecret, normalizedInput, storedHash, this.options.hashing);
 
     if (!isValid) {
-      const attempts = await this.options.store.increment(attemptsKey, this.options.ttl);
+      const attempts = await this.options.store.increment(keys.attemptsKey, this.options.ttl);
 
       if (resolvedLockout && attempts >= resolvedLockout.afterAttempts) {
-        await this.options.store.set(lockKey, "1", resolvedLockout.seconds);
-        await this.options.store.del(otpKey);
-        await this.options.store.del(attemptsKey);
+        await this.options.store.set(keys.lockKey, "1", resolvedLockout.seconds);
+        await this.options.store.del(keys.secretKey);
+        await this.options.store.del(keys.attemptsKey);
         await this.emitLocked(eventContext, "verify", resolvedLockout);
         throw new OTPLockedError();
       }
 
       if (attempts >= this.options.maxAttempts) {
-        await this.options.store.del(otpKey);
-        await this.options.store.del(attemptsKey);
+        await this.options.store.del(keys.secretKey);
+        await this.options.store.del(keys.attemptsKey);
         await this.emitLocked(eventContext, "verify", resolvedLockout);
         throw new OTPMaxAttemptsExceededError();
       }
@@ -267,11 +290,37 @@ export class OTPManager {
       throw new OTPInvalidError();
     }
 
-    await this.options.store.del(otpKey);
-    await this.options.store.del(attemptsKey);
+    await this.options.store.del(keys.secretKey);
+    await this.options.store.del(keys.attemptsKey);
     await this.emitVerified(eventContext);
 
     return true;
+  }
+
+  private buildKeys(
+    kind: SecretKind,
+    payload: GenerateOTPInput | GenerateTokenInput | VerifyOTPInput | VerifyTokenInput,
+    rateScope: OTPThrottleScope,
+    cooldownScope: OTPThrottleScope,
+    lockScope: OTPThrottleScope,
+  ): SecretKeySet {
+    if (kind === "token") {
+      return {
+        secretKey: buildTokenKey(payload),
+        attemptsKey: buildTokenAttemptsKey(payload),
+        rateLimitKey: buildTokenRateLimitKey(payload, rateScope),
+        cooldownKey: buildTokenCooldownKey(payload, cooldownScope),
+        lockKey: buildTokenLockKey(payload, lockScope),
+      };
+    }
+
+    return {
+      secretKey: buildOtpKey(payload),
+      attemptsKey: buildAttemptsKey(payload),
+      rateLimitKey: buildRateLimitKey(payload, rateScope),
+      cooldownKey: buildCooldownKey(payload, cooldownScope),
+      lockKey: buildLockKey(payload, lockScope),
+    };
   }
 
   private getResolvedCooldown(): OTPCooldownConfig | undefined {
@@ -325,7 +374,7 @@ export class OTPManager {
   }
 
   private buildEventContext(
-    input: GenerateOTPInput | VerifyOTPInput,
+    input: GenerateOTPInput | VerifyOTPInput | GenerateTokenInput | VerifyTokenInput,
     normalizedIdentifier: string,
   ): OTPEventContext {
     return {
@@ -639,7 +688,9 @@ function validateManagerOptions(options: OTPManagerOptions): void {
   }
 }
 
-function validatePayload(input: GenerateOTPInput | VerifyOTPInput): void {
+function validatePayload(
+  input: GenerateOTPInput | VerifyOTPInput | GenerateTokenInput | VerifyTokenInput,
+): void {
   if (!input.type || !input.type.trim()) {
     throw new TypeError("type must be a non-empty string.");
   }
@@ -652,5 +703,3 @@ function validatePayload(input: GenerateOTPInput | VerifyOTPInput): void {
 function isValidScope(scope: string): scope is OTPThrottleScope {
   return ["identifier", "intent", "channel", "intent_channel"].includes(scope);
 }
-
-
