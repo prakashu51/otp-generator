@@ -5,6 +5,8 @@ export { MemoryAdapter } from "./adapters/memory.adapter.js";
 export type {
   GenerateOTPInput,
   GenerateOTPResult,
+  GenerateTokenInput,
+  GenerateTokenResult,
   IdentifierNormalizationConfig,
   OTPChannel,
   OTPCooldownBlockedEvent,
@@ -28,6 +30,7 @@ export type {
   OTPVerifiedEvent,
   StoreAdapter,
   VerifyOTPInput,
+  VerifyTokenInput,
 } from "./core/otp.types.js";
 
 export {
@@ -39,3 +42,4 @@ export {
   OTPRateLimitExceededError,
   OTPResendCooldownError,
 } from "./errors/otp.errors.js";
+

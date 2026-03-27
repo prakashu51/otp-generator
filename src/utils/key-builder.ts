@@ -47,3 +47,33 @@ export function buildLockKey(
 ): string {
   return `lock:${buildScopedSegments(payload, scope).join(":")}`;
 }
+
+export function buildTokenKey(payload: OTPPayload): string {
+  return `token:${normalizeIntent(payload.intent)}:${payload.type}:${payload.identifier}`;
+}
+
+export function buildTokenAttemptsKey(payload: OTPPayload): string {
+  return `token-attempts:${normalizeIntent(payload.intent)}:${payload.type}:${payload.identifier}`;
+}
+
+export function buildTokenRateLimitKey(
+  payload: OTPPayload,
+  scope: OTPThrottleScope = "channel",
+): string {
+  return `token-rate:${buildScopedSegments(payload, scope).join(":")}`;
+}
+
+export function buildTokenCooldownKey(
+  payload: OTPPayload,
+  scope: OTPThrottleScope = "intent_channel",
+): string {
+  return `token-cooldown:${buildScopedSegments(payload, scope).join(":")}`;
+}
+
+export function buildTokenLockKey(
+  payload: OTPPayload,
+  scope: OTPThrottleScope = "intent_channel",
+): string {
+  return `token-lock:${buildScopedSegments(payload, scope).join(":")}`;
+}
+

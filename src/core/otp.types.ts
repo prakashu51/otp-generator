@@ -17,6 +17,12 @@ export interface VerifyOTPInput extends OTPPayload {
   otp: string;
 }
 
+export interface GenerateTokenInput extends OTPPayload {}
+
+export interface VerifyTokenInput extends OTPPayload {
+  token: string;
+}
+
 export interface RateLimitConfig {
   window: number;
   max: number;
@@ -138,9 +144,15 @@ export interface GenerateOTPResult {
   otp?: string;
 }
 
+export interface GenerateTokenResult {
+  expiresIn: number;
+  token?: string;
+}
+
 export interface StoreAdapter {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
   del(key: string): Promise<void>;
   increment(key: string, ttlSeconds: number): Promise<number>;
 }
+
