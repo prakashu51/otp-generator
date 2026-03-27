@@ -679,3 +679,158 @@ test("sliding window rate limiting requires redis adapter", async () => {
     TypeError,
   );
 });
+
+test("cooldown config takes precedence over legacy resendCooldown", async () => {
+  const cooldownEvents: Array<Record<string, unknown>> = [];
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    resendCooldown: 60,
+    cooldown: {
+      seconds: 5,
+      scope: "identifier",
+    },
+    devMode: true,
+    hooks: {
+      onCooldownBlocked: async (event) => {
+        cooldownEvents.push(event);
+      },
+    },
+  });
+
+  await manager.generate({ type: "email", identifier: "user@example.com", intent: "login" });
+
+  await assert.rejects(
+    manager.generate({ type: "email", identifier: "user@example.com", intent: "signup" }),
+    OTPResendCooldownError,
+  );
+
+  await flushHooks();
+
+  assert.equal(cooldownEvents.length, 1);
+  assert.equal(cooldownEvents[0].resendCooldown, 5);
+  assert.equal(cooldownEvents[0].scope, "identifier");
+});
+
+test("hook payload contract stays stable for rate limiting and lock events", async () => {
+  const rateLimitedEvents: Array<Record<string, unknown>> = [];
+  const lockedEvents: Array<Record<string, unknown>> = [];
+
+  const rateManager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    rateLimit: {
+      window: 60,
+      max: 1,
+    },
+    hooks: {
+      onRateLimited: async (event) => {
+        rateLimitedEvents.push(event as unknown as Record<string, unknown>);
+      },
+    },
+  });
+
+  await rateManager.generate({ type: "email", identifier: "rate@example.com", intent: "login" });
+  await assert.rejects(
+    rateManager.generate({ type: "email", identifier: "rate@example.com", intent: "login" }),
+    OTPRateLimitExceededError,
+  );
+
+  const lockManager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    lockout: {
+      seconds: 60,
+      afterAttempts: 1,
+      appliesTo: "both",
+    },
+    hooks: {
+      onLocked: async (event) => {
+        lockedEvents.push(event as unknown as Record<string, unknown>);
+      },
+    },
+  });
+
+  await lockManager.generate({ type: "email", identifier: "lock@example.com", intent: "login" });
+  await assert.rejects(
+    lockManager.verify({
+      type: "email",
+      identifier: "lock@example.com",
+      intent: "login",
+      otp: "000000",
+    }),
+    OTPLockedError,
+  );
+
+  await flushHooks();
+
+  assert.deepEqual(
+    Object.keys(rateLimitedEvents[0]).sort(),
+    ["algorithm", "identifier", "intent", "max", "metadata", "normalizedIdentifier", "scope", "timestamp", "type", "window"].sort(),
+  );
+  assert.equal(rateLimitedEvents[0].scope, "channel");
+  assert.equal(rateLimitedEvents[0].algorithm, "fixed_window");
+
+  assert.deepEqual(
+    Object.keys(lockedEvents[0]).sort(),
+    ["appliesTo", "identifier", "intent", "lockoutSeconds", "maxAttempts", "metadata", "normalizedIdentifier", "operation", "scope", "timestamp", "type"].sort(),
+  );
+  assert.equal(lockedEvents[0].operation, "verify");
+  assert.equal(lockedEvents[0].appliesTo, "both");
+  assert.equal(lockedEvents[0].scope, "intent_channel");
+});
+
+test("hooks.throwOnError can intentionally fail the OTP flow", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hooks: {
+      throwOnError: true,
+      onGenerated: async () => {
+        throw new Error("blocking hook failure");
+      },
+    },
+  });
+
+  await assert.rejects(
+    manager.generate({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+    }),
+    /blocking hook failure/,
+  );
+});
+
+test("startup validation guards store adapter shape and hashing rotation conflicts", () => {
+  assert.throws(
+    () =>
+      new OTPManager({
+        store: {} as never,
+        ttl: 30,
+        maxAttempts: 3,
+      }),
+    /store.get must be a function/,
+  );
+
+  assert.throws(
+    () =>
+      new OTPManager({
+        store: new MemoryAdapter(),
+        ttl: 30,
+        maxAttempts: 3,
+        hashing: {
+          secret: "same-secret",
+          previousSecrets: ["same-secret"],
+        },
+      }),
+    /must not include hashing.secret/,
+  );
+});
