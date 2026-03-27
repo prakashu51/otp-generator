@@ -1,0 +1,52 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in redis-otp-manager
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please share as much detail as you can so we can reproduce it quickly.
+  - type: input
+    id: package_version
+    attributes:
+      label: Package version
+      placeholder: 1.0.1
+    validations:
+      required: true
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js version
+      placeholder: 20.x
+    validations:
+      required: true
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: Adapter used
+      options:
+        - RedisAdapter
+        - MemoryAdapter
+        - Custom adapter
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest code or request flow needed to reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

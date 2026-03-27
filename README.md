@@ -204,11 +204,24 @@ The package is currently validated for:
 - NestJS provider smoke coverage
 - ESM and CommonJS package smoke checks
 
+## Feedback And Support
+
+If you run into a bug, unexpected behavior, or have a feature request, please open an issue here:
+- Bug reports: https://github.com/prakashu51/otp-generator/issues
+- Feature requests: https://github.com/prakashu51/otp-generator/issues
+
+When reporting, please include:
+- package version
+- Node.js version
+- adapter used (`RedisAdapter` or `MemoryAdapter`)
+- minimal reproduction steps
+- expected behavior and actual behavior
 ## Post-1.0.0 Roadmap
 
 - optional delivery helpers for email links and magic-link style verification
 - token and verification-link flows
 - additional audit and delivery adapters
+
 
 
 
