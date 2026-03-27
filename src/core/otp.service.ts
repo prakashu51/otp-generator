@@ -475,6 +475,17 @@ export class OTPManager {
 }
 
 function validateManagerOptions(options: OTPManagerOptions): void {
+  if (!options.store || typeof options.store !== "object") {
+    throw new TypeError("store must be a valid adapter object.");
+  }
+
+  const storeMethods = ["get", "set", "del", "increment"] as const;
+  for (const method of storeMethods) {
+    if (typeof options.store[method] !== "function") {
+      throw new TypeError(`store.${method} must be a function.`);
+    }
+  }
+
   if (!Number.isInteger(options.ttl) || options.ttl <= 0) {
     throw new TypeError("ttl must be a positive integer.");
   }
@@ -590,6 +601,13 @@ function validateManagerOptions(options: OTPManagerOptions): void {
     }
 
     if (
+      options.hashing.secret &&
+      options.hashing.previousSecrets?.includes(options.hashing.secret)
+    ) {
+      throw new TypeError("hashing.previousSecrets must not include hashing.secret.");
+    }
+
+    if (
       options.hashing.allowLegacyVerify !== undefined &&
       typeof options.hashing.allowLegacyVerify !== "boolean"
     ) {
@@ -634,4 +652,5 @@ function validatePayload(input: GenerateOTPInput | VerifyOTPInput): void {
 function isValidScope(scope: string): scope is OTPThrottleScope {
   return ["identifier", "intent", "channel", "intent_channel"].includes(scope);
 }
+
 

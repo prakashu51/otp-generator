@@ -130,13 +130,9 @@ type OTPManagerOptions = {
 };
 ```
 
-### Backward compatibility notes
-- `resendCooldown` still works and remains supported.
-- `cooldown` is the richer replacement for policy-based cooldown configuration.
-- legacy SHA-256 verification is still supported by default when migrating to HMAC.
-- CommonJS and ESM consumers are both supported.
+### Backward compatibility notes`r`n- `resendCooldown` still works and remains supported.`r`n- `cooldown` is the richer replacement for policy-based cooldown configuration.`r`n- legacy SHA-256 verification is still supported by default when migrating to HMAC.`r`n- CommonJS and ESM consumers are both supported.`r`n`r`n### Config precedence`r`n- `cooldown` takes precedence over legacy `resendCooldown` when both are provided.`r`n- `rateLimit.scope` defaults to `channel`.`r`n- `rateLimit.algorithm` defaults to `fixed_window`.`r`n- `lockout.appliesTo` defaults to `both`.`r`n- `lockout.scope` defaults to `intent_channel`.`r`n- `hooks.throwOnError` defaults to non-blocking behavior unless explicitly set to `true`.
 
-## Error Reference
+## Stable API`r`n`r`nThe following public surface is intended to remain stable into `v1.0.0`:`r`n- `OTPManager``r`n- `RedisAdapter``r`n- `MemoryAdapter``r`n- exported error classes`r`n- exported hook and config types`r`n- `redis-otp-manager/nest``r`n`r`nFull stability notes: [docs/stability.md](./docs/stability.md)`r`n`r`n## Error Reference
 
 The package can throw these errors:
 - `OTPRateLimitExceededError`
@@ -182,8 +178,5 @@ The package is currently validated for:
 - NestJS provider smoke coverage
 - ESM and CommonJS package smoke checks
 
-## Roadmap Toward v1.0.0
+## Roadmap Toward v1.0.0`r`n`r`n- final release-candidate cleanup and packaging confidence`r`n- optional delivery helpers for email links and magic-link style verification`r`n- post-1.0.0 token and verification-link flows
 
-- final API stabilization and docs polish
-- production config recipes and examples refinement
-- optional delivery helpers for email links and magic-link style verification
