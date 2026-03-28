@@ -59,45 +59,37 @@ await otp.verify({
 
 ## Feature Overview
 
-### Core flows
+### Core Flows
 - OTP generation and verification
-- verification token generation and verification
-- intent-aware keying
-- in-memory adapter for tests
+- Verification token generation and verification
+- Intent-aware keying
+- In-memory adapter for tests
 - NestJS module export via `redis-otp-manager/nest`
 
 ### Security
-- keyed HMAC support through `hashing.secret`
-- secret rotation with `previousSecrets`
-- legacy SHA-256 verification support for migrations
-- atomic Redis verification to prevent double-success races
+- Keyed HMAC support through `hashing.secret`
+- Secret rotation with `previousSecrets`
+- Legacy SHA-256 verification support for migrations
+- Atomic Redis verification to prevent double-success races
 
-### Abuse controls
-- cooldown policy support
-- fixed-window and Redis sliding-window rate limiting
-- scoped throttling by identifier, intent, channel, or intent + channel
-- temporary lock windows after repeated failed verification attempts
+### Abuse Controls
+- Cooldown policy support
+- Fixed-window and Redis sliding-window rate limiting
+- Scoped throttling by identifier, intent, channel, or intent + channel
+- Temporary lock windows after repeated failed verification attempts
 
 ### Observability
-- lifecycle hooks for generated, verified, failed, locked, rate-limited, and cooldown-blocked events
-- request-scoped metadata passed to hook payloads
-- non-blocking hook error handling by default
+- Lifecycle hooks for generated, verified, failed, locked, rate-limited, and cooldown-blocked events
+- Additive `credentialKind` in hook payloads so OTP and token flows are distinguishable
+- Request-scoped metadata passed to hook payloads
+- Non-blocking hook error handling by default
 
-## Plain Node Example
+## Examples
 
-See [examples/node-basic/README.md](./examples/node-basic/README.md).
-
-## NestJS Example
-
-See [examples/nest-basic/README.md](./examples/nest-basic/README.md).
-
-## Express Example
-
-See [examples/express-basic/README.md](./examples/express-basic/README.md).
-
-## Verification Link Example
-
-See [examples/node-token-link/README.md](./examples/node-token-link/README.md).
+- Plain Node: [examples/node-basic/README.md](./examples/node-basic/README.md)
+- NestJS: [examples/nest-basic/README.md](./examples/nest-basic/README.md)
+- Express: [examples/express-basic/README.md](./examples/express-basic/README.md)
+- Verification Links: [examples/node-token-link/README.md](./examples/node-token-link/README.md)
 
 ## Configuration
 
@@ -169,6 +161,8 @@ The package can throw these errors:
 - `OTPRateLimitExceededError`
 - `OTPExpiredError`
 - `OTPInvalidError`
+- `VerificationSecretExpiredError`
+- `VerificationSecretInvalidError`
 - `OTPMaxAttemptsExceededError`
 - `OTPResendCooldownError`
 - `OTPLockedError`
@@ -211,7 +205,7 @@ The package is currently validated for:
 
 ## Feedback And Support
 
-If you run into a bug, unexpected behavior, or have a feature request, please open an issue here:
+If you run into a bug, unexpected behavior, or have a feature request, open an issue here:
 - Bug reports: https://github.com/prakashu51/otp-generator/issues
 - Feature requests: https://github.com/prakashu51/otp-generator/issues
 
@@ -221,9 +215,12 @@ When reporting, please include:
 - adapter used (`RedisAdapter` or `MemoryAdapter`)
 - minimal reproduction steps
 - expected behavior and actual behavior
+
 ## Token Flow
 
 Use `generateToken()` and `verifyToken()` when you want email verification links or magic-link style flows without changing the existing OTP API.
+
+Token verification returns token-friendly generic secret errors such as `VerificationSecretExpiredError` and `VerificationSecretInvalidError`, while the OTP flow keeps the original OTP error classes.
 
 ```ts
 const generated = await otp.generateToken({
@@ -242,9 +239,11 @@ await otp.verifyToken({
 
 ## Post-1.0.0 Roadmap
 
-- optional delivery helpers for email links and magic-link style verification
-- additional audit and delivery adapters
-- more delivery and token workflow helpers
+- Delivery helpers for email links and magic-link style verification
+- Additional audit and delivery adapters
+- Richer token and verification-link workflow helpers
+
+
 
 
 
