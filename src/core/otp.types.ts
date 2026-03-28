@@ -1,5 +1,6 @@
 export type OTPChannel = "email" | "sms" | "token" | (string & {});
 export type OTPMetadata = Record<string, unknown>;
+export type OTPCredentialKind = "otp" | "token";
 export type OTPThrottleScope = "identifier" | "intent" | "channel" | "intent_channel";
 export type OTPRateLimitAlgorithm = "fixed_window" | "sliding_window";
 export type OTPLockoutAppliesTo = "verify" | "generate" | "both";
@@ -55,6 +56,7 @@ export interface OTPHashingOptions {
 }
 
 export interface OTPEventContext {
+  credentialKind: OTPCredentialKind;
   type: OTPChannel;
   identifier: string;
   normalizedIdentifier: string;
@@ -155,4 +157,5 @@ export interface StoreAdapter {
   del(key: string): Promise<void>;
   increment(key: string, ttlSeconds: number): Promise<number>;
 }
+
 

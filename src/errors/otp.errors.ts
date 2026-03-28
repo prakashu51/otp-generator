@@ -43,3 +43,16 @@ export class OTPLockedError extends OTPError {
     super(message, "OTP_LOCKED");
   }
 }
+
+export class VerificationSecretExpiredError extends OTPError {
+  constructor(message = "Verification secret has expired or does not exist.") {
+    super(message, "VERIFICATION_SECRET_EXPIRED");
+  }
+}
+
+export class VerificationSecretInvalidError extends OTPError {
+  constructor(message = "Verification secret is invalid.") {
+    super(message, "VERIFICATION_SECRET_INVALID");
+  }
+}
+
