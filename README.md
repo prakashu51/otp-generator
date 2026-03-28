@@ -91,6 +91,7 @@ await otp.verify({
 - Express: [examples/express-basic/README.md](./examples/express-basic/README.md)
 - Verification Links: [examples/node-token-link/README.md](./examples/node-token-link/README.md)
 - NestJS Verification Links: [examples/nest-token-link/README.md](./examples/nest-token-link/README.md)
+- Adapter Usage: [examples/node-adapters/README.md](./examples/node-adapters/README.md)
 
 ## Configuration
 
@@ -216,6 +217,45 @@ When reporting, please include:
 - adapter used (`RedisAdapter` or `MemoryAdapter`)
 - minimal reproduction steps
 - expected behavior and actual behavior
+
+## Adapters
+
+Use `auditAdapter` and `deliveryAdapter` when you want provider-agnostic integration points without changing the existing OTP or token core flow.
+
+```ts
+const otp = new OTPManager({
+  store: new RedisAdapter(redisClient),
+  ttl: 300,
+  maxAttempts: 3,
+  deliveryAdapter: {
+    async send(payload) {
+      console.log("send", payload);
+    },
+  },
+  auditAdapter: {
+    async record(event) {
+      console.log("audit", event);
+    },
+  },
+});
+
+await otp.generateAndSend({
+  type: "email",
+  identifier: "user@example.com",
+  intent: "login",
+});
+
+await otp.generateTokenAndSend(
+  {
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  },
+  {
+    baseUrl: "https://app.example.com/verify-email",
+  },
+);
+```
 
 ## Token Flow
 

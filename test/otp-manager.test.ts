@@ -1078,3 +1078,171 @@ test("token hooks include credentialKind token", async () => {
 
 
 
+
+
+test("generateAndSend uses deliveryAdapter for OTP payloads", async () => {
+  const deliveries = [];
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: false,
+    deliveryAdapter: {
+      send: async (payload) => {
+        deliveries.push(payload);
+      },
+    },
+  });
+
+  const generated = await manager.generateAndSend({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    metadata: { requestId: "req_send_1" },
+  });
+
+  assert.equal(generated.otp, undefined);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].credentialKind, "otp");
+  assert.equal(deliveries[0].type, "email");
+  assert.equal(deliveries[0].identifier, "user@example.com");
+  assert.equal(deliveries[0].intent, "login");
+  assert.equal(typeof deliveries[0].otp, "string");
+  assert.equal(deliveries[0].expiresIn, 30);
+  assert.deepEqual(deliveries[0].metadata, { requestId: "req_send_1" });
+
+  const verified = await manager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: deliveries[0].otp,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("generateTokenAndSend uses deliveryAdapter and link helpers", async () => {
+  const deliveries = [];
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: false,
+    deliveryAdapter: {
+      send: async (payload) => {
+        deliveries.push(payload);
+      },
+    },
+  });
+
+  const generated = await manager.generateTokenAndSend(
+    {
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      metadata: { source: "email" },
+    },
+    {
+      baseUrl: "https://app.example.com/verify-email",
+      extraParams: { campaign: "welcome" },
+    },
+  );
+
+  assert.equal(generated.token, undefined);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].credentialKind, "token");
+  assert.equal(deliveries[0].type, "email");
+  assert.equal(deliveries[0].identifier, "user@example.com");
+  assert.equal(typeof deliveries[0].token, "string");
+  assert.match(deliveries[0].link ?? "", /token=/);
+  assert.match(deliveries[0].link ?? "", /campaign=welcome/);
+  assert.deepEqual(deliveries[0].metadata, { source: "email" });
+
+  const verified = await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+    token: deliveries[0].token,
+  });
+
+  assert.equal(verified, true);
+});
+
+test("generateAndSend requires deliveryAdapter", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  await assert.rejects(
+    manager.generateAndSend({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "login",
+    }),
+    /deliveryAdapter is required/,
+  );
+});
+
+test("auditAdapter records lifecycle events", async () => {
+  const auditEvents = [];
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    auditAdapter: {
+      record: async (event) => {
+        auditEvents.push(event);
+      },
+    },
+  });
+
+  const generated = await manager.generate({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+  });
+
+  await flushHooks();
+
+  await manager.verify({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "login",
+    otp: generated.otp,
+  });
+
+  await flushHooks();
+
+  assert.equal(auditEvents.length, 2);
+  assert.equal(auditEvents[0].event, "generated");
+  assert.equal(auditEvents[1].event, "verified");
+  assert.equal(auditEvents[0].payload.credentialKind, "otp");
+});
+
+test("startup validation guards adapter shapes", () => {
+  assert.throws(
+    () =>
+      new OTPManager({
+        store: new MemoryAdapter(),
+        ttl: 30,
+        maxAttempts: 3,
+        auditAdapter: {} as never,
+      }),
+    /auditAdapter.record must be a function/,
+  );
+
+  assert.throws(
+    () =>
+      new OTPManager({
+        store: new MemoryAdapter(),
+        ttl: 30,
+        maxAttempts: 3,
+        deliveryAdapter: {} as never,
+      }),
+    /deliveryAdapter.send must be a function/,
+  );
+});

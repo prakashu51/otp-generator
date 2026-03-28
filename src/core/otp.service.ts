@@ -1,4 +1,5 @@
 import { RedisAdapter } from "../adapters/redis.adapter.js";
+import { buildOtpDeliveryPayload, buildTokenDeliveryPayload } from "../utils/link-builder.js";
 import { generateNumericOtp } from "./otp.generator.js";
 import { generateSecureToken } from "./token.generator.js";
 import { buildVerificationHashes, createStoredOtpHash, verifyOtpHash } from "./otp.hash.js";
@@ -7,8 +8,10 @@ import type {
   GenerateOTPResult,
   GenerateTokenInput,
   GenerateTokenResult,
+  OTPAuditEvent,
   OTPCooldownBlockedEvent,
   OTPCooldownConfig,
+  OTPDeliveryRequest,
   OTPEventContext,
   OTPFailedEvent,
   OTPCredentialKind,
@@ -18,9 +21,10 @@ import type {
   OTPLockoutConfig,
   OTPManagerOptions,
   OTPRateLimitedEvent,
-  RateLimitConfig,
   OTPThrottleScope,
+  OTPTokenLinkOptions,
   OTPVerifiedEvent,
+  RateLimitConfig,
   VerifyOTPInput,
   VerifyTokenInput,
 } from "./otp.types.js";
@@ -57,6 +61,12 @@ interface SecretKeySet {
   lockKey: string;
 }
 
+interface GeneratedSecretFlowResult<TResult extends GenerateOTPResult | GenerateTokenResult> {
+  result: TResult;
+  secret: string;
+  normalizedInput: GenerateOTPInput | GenerateTokenInput;
+}
+
 type SecretKind = "otp" | "token";
 
 export class OTPManager {
@@ -80,7 +90,29 @@ export class OTPManager {
   }
 
   async generate(input: GenerateOTPInput): Promise<GenerateOTPResult> {
-    return this.generateSecretFlow("otp", input, () => generateNumericOtp(this.options.otpLength), "otp");
+    return (await this.generateSecretFlow("otp", input, () => generateNumericOtp(this.options.otpLength), "otp")).result;
+  }
+
+  async generateAndSend(input: GenerateOTPInput): Promise<GenerateOTPResult> {
+    const flow = await this.generateSecretFlow(
+      "otp",
+      input,
+      () => generateNumericOtp(this.options.otpLength),
+      "otp",
+    );
+
+    await this.sendDelivery(
+      buildOtpDeliveryPayload({
+        type: flow.normalizedInput.type,
+        identifier: flow.normalizedInput.identifier,
+        intent: flow.normalizedInput.intent,
+        otp: flow.secret,
+        expiresIn: flow.result.expiresIn,
+        metadata: flow.normalizedInput.metadata,
+      }),
+    );
+
+    return flow.result;
   }
 
   async verify(input: VerifyOTPInput): Promise<true> {
@@ -88,7 +120,38 @@ export class OTPManager {
   }
 
   async generateToken(input: GenerateTokenInput): Promise<GenerateTokenResult> {
-    return this.generateSecretFlow("token", input, () => generateSecureToken(), "token");
+    return (await this.generateSecretFlow("token", input, () => generateSecureToken(), "token")).result;
+  }
+
+  async generateTokenAndSend(
+    input: GenerateTokenInput,
+    linkOptions?: OTPTokenLinkOptions,
+  ): Promise<GenerateTokenResult> {
+    const flow = await this.generateSecretFlow("token", input, () => generateSecureToken(), "token");
+
+    const deliveryPayload: OTPDeliveryRequest = linkOptions
+      ? buildTokenDeliveryPayload({
+          ...linkOptions,
+          token: flow.secret,
+          identifier: flow.normalizedInput.identifier,
+          intent: flow.normalizedInput.intent,
+          type: flow.normalizedInput.type,
+          expiresIn: flow.result.expiresIn,
+          metadata: flow.normalizedInput.metadata,
+        })
+      : {
+          credentialKind: "token",
+          type: flow.normalizedInput.type,
+          identifier: flow.normalizedInput.identifier,
+          intent: flow.normalizedInput.intent,
+          token: flow.secret,
+          expiresIn: flow.result.expiresIn,
+          metadata: flow.normalizedInput.metadata,
+        };
+
+    await this.sendDelivery(deliveryPayload);
+
+    return flow.result;
   }
 
   async verifyToken(input: VerifyTokenInput): Promise<true> {
@@ -100,7 +163,7 @@ export class OTPManager {
     input: GenerateOTPInput | GenerateTokenInput,
     generateSecret: () => string,
     resultField: "otp" | "token",
-  ): Promise<GenerateOTPResult | GenerateTokenResult> {
+  ): Promise<GeneratedSecretFlowResult<GenerateOTPResult | GenerateTokenResult>> {
     validatePayload(input);
     const normalizedInput = normalizePayloadIdentifier(input, this.options.identifierNormalization);
     const eventContext = this.buildEventContext(kind, input, normalizedInput.identifier);
@@ -108,7 +171,13 @@ export class OTPManager {
     const resolvedRateLimit = this.getResolvedRateLimit();
     const resolvedCooldown = this.getResolvedCooldown();
     const resolvedLockout = this.getResolvedLockout();
-    const keys = this.buildKeys(kind, normalizedInput, resolvedRateLimit?.scope ?? "channel", resolvedCooldown?.scope ?? "intent_channel", resolvedLockout?.scope ?? "intent_channel");
+    const keys = this.buildKeys(
+      kind,
+      normalizedInput,
+      resolvedRateLimit?.scope ?? "channel",
+      resolvedCooldown?.scope ?? "intent_channel",
+      resolvedLockout?.scope ?? "intent_channel",
+    );
     const secret = generateSecret();
     const storedHash = createStoredOtpHash(secret, normalizedInput, this.options.hashing);
 
@@ -159,7 +228,11 @@ export class OTPManager {
         };
 
         await this.emitGenerated(eventContext);
-        return result;
+        return {
+          result,
+          secret,
+          normalizedInput,
+        };
       }
     }
 
@@ -194,7 +267,11 @@ export class OTPManager {
     };
 
     await this.emitGenerated(eventContext);
-    return result;
+    return {
+      result,
+      secret,
+      normalizedInput,
+    };
   }
 
   private async verifySecretFlow(
@@ -394,8 +471,16 @@ export class OTPManager {
     };
   }
 
+  private async sendDelivery(payload: OTPDeliveryRequest): Promise<void> {
+    if (!this.options.deliveryAdapter) {
+      throw new TypeError("deliveryAdapter is required for send helpers.");
+    }
+
+    await this.options.deliveryAdapter.send(payload);
+  }
+
   private async emitGenerated(context: OTPEventContext): Promise<void> {
-    await this.dispatchHook("generated", {
+    await this.dispatchLifecycleEvent("generated", {
       ...context,
       expiresIn: this.options.ttl,
       devMode: this.options.devMode,
@@ -403,7 +488,7 @@ export class OTPManager {
   }
 
   private async emitVerified(context: OTPEventContext): Promise<void> {
-    await this.dispatchHook("verified", context);
+    await this.dispatchLifecycleEvent("verified", context);
   }
 
   private async emitFailed(
@@ -411,7 +496,7 @@ export class OTPManager {
     reason: OTPFailedEvent["reason"],
     attemptsUsed?: number,
   ): Promise<void> {
-    await this.dispatchHook("failed", {
+    await this.dispatchLifecycleEvent("failed", {
       ...context,
       reason,
       attemptsUsed,
@@ -425,7 +510,7 @@ export class OTPManager {
     operation: OTPLockedEvent["operation"],
     lockout?: OTPLockoutConfig,
   ): Promise<void> {
-    await this.dispatchHook("locked", {
+    await this.dispatchLifecycleEvent("locked", {
       ...context,
       maxAttempts: this.options.maxAttempts,
       operation,
@@ -443,7 +528,7 @@ export class OTPManager {
       return;
     }
 
-    await this.dispatchHook("rate_limited", {
+    await this.dispatchLifecycleEvent("rate_limited", {
       ...context,
       window: rateLimit.window,
       max: rateLimit.max,
@@ -460,14 +545,14 @@ export class OTPManager {
       return;
     }
 
-    await this.dispatchHook("cooldown_blocked", {
+    await this.dispatchLifecycleEvent("cooldown_blocked", {
       ...context,
       resendCooldown: cooldown.seconds,
       scope: cooldown.scope ?? "intent_channel",
     });
   }
 
-  private async dispatchHook(
+  private async dispatchLifecycleEvent(
     eventName: OTPHookErrorContext["event"],
     payload:
       | OTPGeneratedEvent
@@ -478,14 +563,18 @@ export class OTPManager {
       | OTPCooldownBlockedEvent,
   ): Promise<void> {
     const hook = this.getHook(eventName);
+    const auditEvent: OTPAuditEvent = {
+      event: eventName,
+      payload,
+    };
 
-    if (!hook) {
+    if (!hook && !this.options.auditAdapter) {
       return;
     }
 
-    const execute = async (): Promise<void> => {
+    const runWithHandling = async (fn: () => Promise<void> | void): Promise<void> => {
       try {
-        await hook(payload as never);
+        await fn();
       } catch (error) {
         if (this.options.hooks?.onHookError) {
           await this.options.hooks.onHookError(error, {
@@ -497,6 +586,16 @@ export class OTPManager {
         if (this.options.hooks?.throwOnError) {
           throw error;
         }
+      }
+    };
+
+    const execute = async (): Promise<void> => {
+      if (hook) {
+        await runWithHandling(() => hook(payload as never));
+      }
+
+      if (this.options.auditAdapter) {
+        await runWithHandling(() => this.options.auditAdapter!.record(auditEvent));
       }
     };
 
@@ -693,6 +792,14 @@ function validateManagerOptions(options: OTPManagerOptions): void {
       throw new TypeError("hooks.throwOnError must be a boolean.");
     }
   }
+
+  if (options.auditAdapter && typeof options.auditAdapter.record !== "function") {
+    throw new TypeError("auditAdapter.record must be a function.");
+  }
+
+  if (options.deliveryAdapter && typeof options.deliveryAdapter.send !== "function") {
+    throw new TypeError("deliveryAdapter.send must be a function.");
+  }
 }
 
 function validatePayload(
@@ -710,5 +817,3 @@ function validatePayload(
 function isValidScope(scope: string): scope is OTPThrottleScope {
   return ["identifier", "intent", "channel", "intent_channel"].includes(scope);
 }
-
-

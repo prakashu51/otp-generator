@@ -126,6 +126,65 @@ export interface OTPHooks {
   throwOnError?: boolean;
 }
 
+export interface OTPAuditEvent {
+  event: OTPHookErrorContext["event"];
+  payload: OTPHookErrorContext["payload"];
+}
+
+export interface OTPAuditAdapter {
+  record(event: OTPAuditEvent): void | Promise<void>;
+}
+
+export interface VerificationLinkParamNames {
+  token?: string;
+  identifier?: string;
+  intent?: string;
+  type?: string;
+}
+
+export interface OTPTokenLinkOptions {
+  baseUrl: string;
+  paramNames?: VerificationLinkParamNames;
+  extraParams?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface BuildVerificationLinkOptions extends OTPTokenLinkOptions {
+  token: string;
+  identifier: string;
+  intent?: string;
+  type?: OTPChannel;
+}
+
+export interface OTPDeliveryRequest {
+  credentialKind: OTPCredentialKind;
+  type: OTPChannel;
+  identifier: string;
+  intent?: string;
+  expiresIn: number;
+  metadata?: OTPMetadata;
+  otp?: string;
+  token?: string;
+  link?: string;
+}
+
+export interface OTPDeliveryAdapter {
+  send(payload: OTPDeliveryRequest): void | Promise<void>;
+}
+
+export interface BuildOtpDeliveryPayloadOptions {
+  type: OTPChannel;
+  identifier: string;
+  intent?: string;
+  otp: string;
+  expiresIn: number;
+  metadata?: OTPMetadata;
+}
+
+export interface BuildTokenDeliveryPayloadOptions extends BuildVerificationLinkOptions {
+  expiresIn: number;
+  metadata?: OTPMetadata;
+}
+
 export interface OTPManagerOptions {
   store: StoreAdapter;
   ttl: number;
@@ -139,6 +198,8 @@ export interface OTPManagerOptions {
   identifierNormalization?: IdentifierNormalizationConfig;
   hashing?: OTPHashingOptions;
   hooks?: OTPHooks;
+  auditAdapter?: OTPAuditAdapter;
+  deliveryAdapter?: OTPDeliveryAdapter;
 }
 
 export interface GenerateOTPResult {
@@ -151,41 +212,9 @@ export interface GenerateTokenResult {
   token?: string;
 }
 
-export interface VerificationLinkParamNames {
-  token?: string;
-  identifier?: string;
-  intent?: string;
-  type?: string;
-}
-
-export interface BuildVerificationLinkOptions {
-  baseUrl: string;
-  token: string;
-  identifier: string;
-  intent?: string;
-  type?: OTPChannel;
-  paramNames?: VerificationLinkParamNames;
-  extraParams?: Record<string, string | number | boolean | null | undefined>;
-}
-
-export interface BuildTokenDeliveryPayloadOptions extends BuildVerificationLinkOptions {
-  expiresIn: number;
-}
-
-export interface TokenDeliveryPayload {
-  type?: OTPChannel;
-  identifier: string;
-  intent?: string;
-  token: string;
-  expiresIn: number;
-  link: string;
-}
-
 export interface StoreAdapter {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
   del(key: string): Promise<void>;
   increment(key: string, ttlSeconds: number): Promise<number>;
 }
-
-

@@ -2,18 +2,24 @@ export { OTPManager } from "./core/otp.service.js";
 export { RedisAdapter } from "./adapters/redis.adapter.js";
 export { MemoryAdapter } from "./adapters/memory.adapter.js";
 export {
+  buildOtpDeliveryPayload,
   buildTokenDeliveryPayload,
   buildVerificationLink,
 } from "./utils/link-builder.js";
 
 export type {
+  BuildOtpDeliveryPayloadOptions,
   BuildTokenDeliveryPayloadOptions,
   BuildVerificationLinkOptions,
   GenerateOTPInput,
   GenerateOTPResult,
   GenerateTokenInput,
   GenerateTokenResult,
+  OTPAuditAdapter,
+  OTPAuditEvent,
   OTPCredentialKind,
+  OTPDeliveryAdapter,
+  OTPDeliveryRequest,
   IdentifierNormalizationConfig,
   OTPChannel,
   OTPCooldownBlockedEvent,
@@ -33,14 +39,17 @@ export type {
   OTPRateLimitedEvent,
   OTPRateLimitAlgorithm,
   OTPThrottleScope,
+  OTPTokenLinkOptions,
   OTPVerifiedEvent,
   RateLimitConfig,
   StoreAdapter,
-  TokenDeliveryPayload,
   VerificationLinkParamNames,
   VerifyOTPInput,
   VerifyTokenInput,
 } from "./core/otp.types.js";
+
+export type { OTPAuditAdapter as AuditAdapter } from "./adapters/audit.adapter.js";
+export type { OTPDeliveryAdapter as DeliveryAdapter } from "./adapters/delivery.adapter.js";
 
 export {
   OTPError,
