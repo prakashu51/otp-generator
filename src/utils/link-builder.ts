@@ -1,34 +1,9 @@
-import type { OTPChannel } from "../core/otp.types.js";
-
-export interface VerificationLinkParamNames {
-  token?: string;
-  identifier?: string;
-  intent?: string;
-  type?: string;
-}
-
-export interface BuildVerificationLinkOptions {
-  baseUrl: string;
-  token: string;
-  identifier: string;
-  intent?: string;
-  type?: OTPChannel;
-  paramNames?: VerificationLinkParamNames;
-  extraParams?: Record<string, string | number | boolean | null | undefined>;
-}
-
-export interface BuildTokenDeliveryPayloadOptions extends BuildVerificationLinkOptions {
-  expiresIn: number;
-}
-
-export interface TokenDeliveryPayload {
-  type?: OTPChannel;
-  identifier: string;
-  intent?: string;
-  token: string;
-  expiresIn: number;
-  link: string;
-}
+import type {
+  BuildOtpDeliveryPayloadOptions,
+  BuildTokenDeliveryPayloadOptions,
+  BuildVerificationLinkOptions,
+  OTPDeliveryRequest,
+} from "../core/otp.types.js";
 
 export function buildVerificationLink(options: BuildVerificationLinkOptions): string {
   const {
@@ -83,15 +58,31 @@ export function buildVerificationLink(options: BuildVerificationLinkOptions): st
   return url.toString();
 }
 
+export function buildOtpDeliveryPayload(
+  options: BuildOtpDeliveryPayloadOptions,
+): OTPDeliveryRequest {
+  return {
+    credentialKind: "otp",
+    type: options.type,
+    identifier: options.identifier,
+    intent: options.intent,
+    otp: options.otp,
+    expiresIn: options.expiresIn,
+    metadata: options.metadata,
+  };
+}
+
 export function buildTokenDeliveryPayload(
   options: BuildTokenDeliveryPayloadOptions,
-): TokenDeliveryPayload {
+): OTPDeliveryRequest {
   return {
-    type: options.type,
+    credentialKind: "token",
+    type: options.type ?? "token",
     identifier: options.identifier,
     intent: options.intent,
     token: options.token,
     expiresIn: options.expiresIn,
+    metadata: options.metadata,
     link: buildVerificationLink(options),
   };
 }

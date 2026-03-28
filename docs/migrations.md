@@ -43,3 +43,9 @@
 - `buildVerificationLink()` was added for provider-agnostic verification-link construction.
 - `buildTokenDeliveryPayload()` was added to prepare token delivery data for your app-side email or magic-link flows.
 - existing OTP and token generation and verification APIs remain unchanged.
+
+
+## 1.3.x to 1.4.0
+- optional `auditAdapter` and `deliveryAdapter` support was added.
+- `generateAndSend()` and `generateTokenAndSend()` were added as explicit send helpers.
+- existing `generate()`, `verify()`, `generateToken()`, and `verifyToken()` behavior remains unchanged.

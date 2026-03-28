@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildOtpDeliveryPayload,
   buildTokenDeliveryPayload,
   buildVerificationLink,
 } from "../src/index.js";
@@ -89,3 +90,23 @@ test("buildVerificationLink validates required fields", () => {
     /token is required/,
   );
 });
+
+
+test("buildOtpDeliveryPayload returns delivery-ready otp context", () => {
+  const payload = buildOtpDeliveryPayload({
+    type: "sms",
+    identifier: "+911234567890",
+    intent: "login",
+    otp: "123456",
+    expiresIn: 300,
+    metadata: { source: "sms" },
+  });
+
+  assert.equal(payload.credentialKind, "otp");
+  assert.equal(payload.type, "sms");
+  assert.equal(payload.identifier, "+911234567890");
+  assert.equal(payload.otp, "123456");
+  assert.equal(payload.expiresIn, 300);
+  assert.deepEqual(payload.metadata, { source: "sms" });
+});
+
