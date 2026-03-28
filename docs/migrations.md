@@ -37,3 +37,9 @@
 - OTP flows continue returning the existing OTP-specific errors.
 - hook payloads now include additive `credentialKind` values so OTP and token events can be distinguished in logs.
 
+
+
+## 1.2.x to 1.3.0
+- `buildVerificationLink()` was added for provider-agnostic verification-link construction.
+- `buildTokenDeliveryPayload()` was added to prepare token delivery data for your app-side email or magic-link flows.
+- existing OTP and token generation and verification APIs remain unchanged.
