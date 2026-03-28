@@ -10,6 +10,8 @@ import {
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
   OTPResendCooldownError,
+  VerificationSecretExpiredError,
+  VerificationSecretInvalidError,
 } from "../src/index.js";
 
 function createManager() {
@@ -771,16 +773,18 @@ test("hook payload contract stays stable for rate limiting and lock events", asy
 
   assert.deepEqual(
     Object.keys(rateLimitedEvents[0]).sort(),
-    ["algorithm", "identifier", "intent", "max", "metadata", "normalizedIdentifier", "scope", "timestamp", "type", "window"].sort(),
+    ["algorithm", "credentialKind", "identifier", "intent", "max", "metadata", "normalizedIdentifier", "scope", "timestamp", "type", "window"].sort(),
   );
   assert.equal(rateLimitedEvents[0].scope, "channel");
   assert.equal(rateLimitedEvents[0].algorithm, "fixed_window");
+  assert.equal(rateLimitedEvents[0].credentialKind, "otp");
 
   assert.deepEqual(
     Object.keys(lockedEvents[0]).sort(),
-    ["appliesTo", "identifier", "intent", "lockoutSeconds", "maxAttempts", "metadata", "normalizedIdentifier", "operation", "scope", "timestamp", "type"].sort(),
+    ["appliesTo", "credentialKind", "identifier", "intent", "lockoutSeconds", "maxAttempts", "metadata", "normalizedIdentifier", "operation", "scope", "timestamp", "type"].sort(),
   );
   assert.equal(lockedEvents[0].operation, "verify");
+  assert.equal(lockedEvents[0].credentialKind, "otp");
   assert.equal(lockedEvents[0].appliesTo, "both");
   assert.equal(lockedEvents[0].scope, "intent_channel");
 });
@@ -979,7 +983,7 @@ test("token verification uses the same max-attempt protection", async () => {
       intent: "verify-email",
       token: "wrong-token",
     }),
-    OTPInvalidError,
+    VerificationSecretInvalidError,
   );
 
   await assert.rejects(
@@ -992,3 +996,85 @@ test("token verification uses the same max-attempt protection", async () => {
     OTPMaxAttemptsExceededError,
   );
 });
+
+test("token flow returns token-specific secret errors", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 1,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: "wrong-token",
+    }),
+    VerificationSecretInvalidError,
+  );
+
+  const second = await manager.generateToken({
+    type: "email",
+    identifier: "user2@example.com",
+    intent: "verify-email",
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "user2@example.com",
+      intent: "verify-email",
+      token: second.token as string,
+    }),
+    VerificationSecretExpiredError,
+  );
+});
+
+test("token hooks include credentialKind token", async () => {
+  const failedEvents: Array<Record<string, unknown>> = [];
+
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hooks: {
+      onFailed: async (event) => {
+        failedEvents.push(event as unknown as Record<string, unknown>);
+      },
+    },
+  });
+
+  await manager.generateToken({
+    type: "email",
+    identifier: "token-event@example.com",
+    intent: "verify-email",
+  });
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "token-event@example.com",
+      intent: "verify-email",
+      token: "wrong-token",
+    }),
+    VerificationSecretInvalidError,
+  );
+
+  await flushHooks();
+
+  assert.equal(failedEvents[0].credentialKind, "token");
+});
+
+
+

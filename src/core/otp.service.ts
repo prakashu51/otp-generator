@@ -11,6 +11,7 @@ import type {
   OTPCooldownConfig,
   OTPEventContext,
   OTPFailedEvent,
+  OTPCredentialKind,
   OTPGeneratedEvent,
   OTPHookErrorContext,
   OTPLockedEvent,
@@ -26,6 +27,8 @@ import type {
 import {
   OTPExpiredError,
   OTPInvalidError,
+  VerificationSecretExpiredError,
+  VerificationSecretInvalidError,
   OTPLockedError,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
@@ -100,7 +103,7 @@ export class OTPManager {
   ): Promise<GenerateOTPResult | GenerateTokenResult> {
     validatePayload(input);
     const normalizedInput = normalizePayloadIdentifier(input, this.options.identifierNormalization);
-    const eventContext = this.buildEventContext(input, normalizedInput.identifier);
+    const eventContext = this.buildEventContext(kind, input, normalizedInput.identifier);
 
     const resolvedRateLimit = this.getResolvedRateLimit();
     const resolvedCooldown = this.getResolvedCooldown();
@@ -199,9 +202,11 @@ export class OTPManager {
     input: VerifyOTPInput | VerifyTokenInput,
     providedSecret: string,
   ): Promise<true> {
+    const expiredError = kind === "otp" ? new OTPExpiredError() : new VerificationSecretExpiredError();
+    const invalidError = kind === "otp" ? new OTPInvalidError() : new VerificationSecretInvalidError();
     validatePayload(input);
     const normalizedInput = normalizePayloadIdentifier(input, this.options.identifierNormalization);
-    const eventContext = this.buildEventContext(input, normalizedInput.identifier);
+    const eventContext = this.buildEventContext(kind, input, normalizedInput.identifier);
     const resolvedLockout = this.getResolvedLockout();
 
     if (!providedSecret || !providedSecret.trim()) {
@@ -240,7 +245,7 @@ export class OTPManager {
 
       if (atomicResult === "expired") {
         await this.emitFailed(eventContext, "expired");
-        throw new OTPExpiredError();
+        throw expiredError;
       }
 
       if (atomicResult === "locked") {
@@ -255,7 +260,7 @@ export class OTPManager {
 
       if (atomicResult === "invalid") {
         await this.emitFailed(eventContext, "invalid");
-        throw new OTPInvalidError();
+        throw invalidError;
       }
     }
 
@@ -263,7 +268,7 @@ export class OTPManager {
 
     if (!storedHash) {
       await this.emitFailed(eventContext, "expired");
-      throw new OTPExpiredError();
+      throw expiredError;
     }
 
     const isValid = verifyOtpHash(providedSecret, normalizedInput, storedHash, this.options.hashing);
@@ -287,7 +292,7 @@ export class OTPManager {
       }
 
       await this.emitFailed(eventContext, "invalid", attempts);
-      throw new OTPInvalidError();
+      throw invalidError;
     }
 
     await this.options.store.del(keys.secretKey);
@@ -374,10 +379,12 @@ export class OTPManager {
   }
 
   private buildEventContext(
+    credentialKind: OTPCredentialKind,
     input: GenerateOTPInput | VerifyOTPInput | GenerateTokenInput | VerifyTokenInput,
     normalizedIdentifier: string,
   ): OTPEventContext {
     return {
+      credentialKind,
       type: input.type,
       identifier: input.identifier,
       normalizedIdentifier,
@@ -703,3 +710,5 @@ function validatePayload(
 function isValidScope(scope: string): scope is OTPThrottleScope {
   return ["identifier", "intent", "channel", "intent_channel"].includes(scope);
 }
+
+

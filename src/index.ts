@@ -7,6 +7,7 @@ export type {
   GenerateOTPResult,
   GenerateTokenInput,
   GenerateTokenResult,
+  OTPCredentialKind,
   IdentifierNormalizationConfig,
   OTPChannel,
   OTPCooldownBlockedEvent,
@@ -37,9 +38,12 @@ export {
   OTPError,
   OTPExpiredError,
   OTPInvalidError,
+  VerificationSecretExpiredError,
+  VerificationSecretInvalidError,
   OTPLockedError,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
   OTPResendCooldownError,
 } from "./errors/otp.errors.js";
+
 

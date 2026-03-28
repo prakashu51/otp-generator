@@ -31,3 +31,9 @@
 - existing `generate()` and `verify()` behavior remains unchanged.
 - token flow uses separate Redis key namespaces to avoid collisions with OTP flow.
 
+
+## 1.1.x to 1.2.0
+- token flows now return `VerificationSecretExpiredError` and `VerificationSecretInvalidError` for expired and invalid token verification.
+- OTP flows continue returning the existing OTP-specific errors.
+- hook payloads now include additive `credentialKind` values so OTP and token events can be distinguished in logs.
+
