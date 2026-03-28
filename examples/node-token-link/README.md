@@ -1,5 +1,13 @@
 # Verification Link Example
 
+This example shows the complete provider-agnostic flow:
+- generate a token
+- build a verification URL
+- prepare a delivery payload for your email layer
+- verify the token in your callback route
+
+## Generate the verification URL
+
 ```ts
 import {
   OTPManager,
@@ -47,16 +55,22 @@ const deliveryPayload = buildTokenDeliveryPayload({
 
 console.log(verificationUrl);
 console.log(deliveryPayload);
-
-await otp.verifyToken({
-  type: "email",
-  identifier: "user@example.com",
-  intent: "verify-email",
-  token: generated.token ?? "",
-});
 ```
 
-Use this flow when you want to send a verification URL by email while keeping token generation and verification inside `redis-otp-manager`.
+## Verify the token from your callback route
+
+```ts
+const result = await otp.verifyToken({
+  type: "email",
+  identifier: req.query.identifier as string,
+  intent: "verify-email",
+  token: req.query.token as string,
+});
+
+if (result) {
+  // mark email as verified in your database
+}
+```
 
 The helper utilities stay provider-agnostic:
 - `buildVerificationLink()` gives you a ready-to-send URL

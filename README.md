@@ -90,6 +90,7 @@ await otp.verify({
 - NestJS: [examples/nest-basic/README.md](./examples/nest-basic/README.md)
 - Express: [examples/express-basic/README.md](./examples/express-basic/README.md)
 - Verification Links: [examples/node-token-link/README.md](./examples/node-token-link/README.md)
+- NestJS Verification Links: [examples/nest-token-link/README.md](./examples/nest-token-link/README.md)
 
 ## Configuration
 
