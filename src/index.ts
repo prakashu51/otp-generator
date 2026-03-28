@@ -1,8 +1,14 @@
 export { OTPManager } from "./core/otp.service.js";
 export { RedisAdapter } from "./adapters/redis.adapter.js";
 export { MemoryAdapter } from "./adapters/memory.adapter.js";
+export {
+  buildTokenDeliveryPayload,
+  buildVerificationLink,
+} from "./utils/link-builder.js";
 
 export type {
+  BuildTokenDeliveryPayloadOptions,
+  BuildVerificationLinkOptions,
   GenerateOTPInput,
   GenerateOTPResult,
   GenerateTokenInput,
@@ -26,10 +32,12 @@ export type {
   OTPPayload,
   OTPRateLimitedEvent,
   OTPRateLimitAlgorithm,
-  RateLimitConfig,
   OTPThrottleScope,
   OTPVerifiedEvent,
+  RateLimitConfig,
   StoreAdapter,
+  TokenDeliveryPayload,
+  VerificationLinkParamNames,
   VerifyOTPInput,
   VerifyTokenInput,
 } from "./core/otp.types.js";
@@ -45,5 +53,3 @@ export {
   OTPRateLimitExceededError,
   OTPResendCooldownError,
 } from "./errors/otp.errors.js";
-
-

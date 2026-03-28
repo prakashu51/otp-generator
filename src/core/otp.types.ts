@@ -151,6 +151,36 @@ export interface GenerateTokenResult {
   token?: string;
 }
 
+export interface VerificationLinkParamNames {
+  token?: string;
+  identifier?: string;
+  intent?: string;
+  type?: string;
+}
+
+export interface BuildVerificationLinkOptions {
+  baseUrl: string;
+  token: string;
+  identifier: string;
+  intent?: string;
+  type?: OTPChannel;
+  paramNames?: VerificationLinkParamNames;
+  extraParams?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface BuildTokenDeliveryPayloadOptions extends BuildVerificationLinkOptions {
+  expiresIn: number;
+}
+
+export interface TokenDeliveryPayload {
+  type?: OTPChannel;
+  identifier: string;
+  intent?: string;
+  token: string;
+  expiresIn: number;
+  link: string;
+}
+
 export interface StoreAdapter {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
