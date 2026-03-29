@@ -77,3 +77,10 @@ export function buildTokenLockKey(
   return `token-lock:${buildScopedSegments(payload, scope).join(":")}`;
 }
 
+
+export function buildTokenUsedKey(
+  payload: OTPPayload,
+  scope: OTPThrottleScope = "intent_channel",
+): string {
+  return `token-used:${buildScopedSegments(payload, scope).join(":")}`;
+}

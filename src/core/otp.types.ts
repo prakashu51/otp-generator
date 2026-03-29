@@ -55,6 +55,12 @@ export interface OTPHashingOptions {
   allowLegacyVerify?: boolean;
 }
 
+export interface OTPReplayProtectionConfig {
+  enabled: boolean;
+  ttl: number;
+  scope?: OTPThrottleScope;
+}
+
 export interface OTPEventContext {
   credentialKind: OTPCredentialKind;
   type: OTPChannel;
@@ -73,7 +79,7 @@ export interface OTPGeneratedEvent extends OTPEventContext {
 export interface OTPVerifiedEvent extends OTPEventContext {}
 
 export interface OTPFailedEvent extends OTPEventContext {
-  reason: "invalid" | "expired";
+  reason: "invalid" | "expired" | "already_used";
   attemptsUsed?: number;
   attemptsRemaining?: number;
 }
@@ -197,6 +203,7 @@ export interface OTPManagerOptions {
   resendCooldown?: number;
   identifierNormalization?: IdentifierNormalizationConfig;
   hashing?: OTPHashingOptions;
+  replayProtection?: OTPReplayProtectionConfig;
   hooks?: OTPHooks;
   auditAdapter?: OTPAuditAdapter;
   deliveryAdapter?: OTPDeliveryAdapter;
@@ -218,3 +225,4 @@ export interface StoreAdapter {
   del(key: string): Promise<void>;
   increment(key: string, ttlSeconds: number): Promise<number>;
 }
+

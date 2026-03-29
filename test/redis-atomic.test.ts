@@ -8,6 +8,7 @@ import {
   OTPRateLimitExceededError,
   OTPResendCooldownError,
   RedisAdapter,
+  VerificationSecretAlreadyUsedError,
 } from "../src/index.js";
 
 interface RecordValue {
@@ -431,4 +432,43 @@ test("redis atomic token verify prevents double-success race conditions", async 
 
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+});
+
+
+test("redis replay protection returns already-used after successful token verification", async () => {
+  const manager = new OTPManager({
+    store: new RedisAdapter(new FakeRedisClient()),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    replayProtection: {
+      enabled: true,
+      ttl: 60,
+    },
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "redis-used@example.com",
+    intent: "verify-email",
+  });
+
+  const verified = await manager.verifyToken({
+    type: "email",
+    identifier: "redis-used@example.com",
+    intent: "verify-email",
+    token: generated.token as string,
+  });
+
+  assert.equal(verified, true);
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "redis-used@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+    VerificationSecretAlreadyUsedError,
+  );
 });

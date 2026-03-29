@@ -21,6 +21,7 @@ import type {
   OTPLockoutConfig,
   OTPManagerOptions,
   OTPRateLimitedEvent,
+  OTPReplayProtectionConfig,
   OTPThrottleScope,
   OTPTokenLinkOptions,
   OTPVerifiedEvent,
@@ -33,6 +34,7 @@ import {
   OTPInvalidError,
   VerificationSecretExpiredError,
   VerificationSecretInvalidError,
+  VerificationSecretAlreadyUsedError,
   OTPLockedError,
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
@@ -49,6 +51,7 @@ import {
   buildTokenKey,
   buildTokenLockKey,
   buildTokenRateLimitKey,
+  buildTokenUsedKey,
 } from "../utils/key-builder.js";
 import { normalizePayloadIdentifier } from "../utils/identifier-normalizer.js";
 import { assertWithinRateLimit } from "../utils/rate-limiter.js";
@@ -59,6 +62,7 @@ interface SecretKeySet {
   rateLimitKey: string;
   cooldownKey: string;
   lockKey: string;
+  usedKey: string;
 }
 
 interface GeneratedSecretFlowResult<TResult extends GenerateOTPResult | GenerateTokenResult> {
@@ -171,6 +175,7 @@ export class OTPManager {
     const resolvedRateLimit = this.getResolvedRateLimit();
     const resolvedCooldown = this.getResolvedCooldown();
     const resolvedLockout = this.getResolvedLockout();
+    const resolvedReplayProtection = kind === "token" ? this.getResolvedReplayProtection() : undefined;
     const keys = this.buildKeys(
       kind,
       normalizedInput,
@@ -281,10 +286,12 @@ export class OTPManager {
   ): Promise<true> {
     const expiredError = kind === "otp" ? new OTPExpiredError() : new VerificationSecretExpiredError();
     const invalidError = kind === "otp" ? new OTPInvalidError() : new VerificationSecretInvalidError();
+    const alreadyUsedError = new VerificationSecretAlreadyUsedError();
     validatePayload(input);
     const normalizedInput = normalizePayloadIdentifier(input, this.options.identifierNormalization);
     const eventContext = this.buildEventContext(kind, input, normalizedInput.identifier);
     const resolvedLockout = this.getResolvedLockout();
+    const resolvedReplayProtection = kind === "token" ? this.getResolvedReplayProtection() : undefined;
 
     if (!providedSecret || !providedSecret.trim()) {
       throw new TypeError(`${kind === "otp" ? "OTP" : "token"} must be a non-empty string.`);
@@ -307,17 +314,24 @@ export class OTPManager {
         otpKey: keys.secretKey,
         attemptsKey: keys.attemptsKey,
         lockKey: keys.lockKey,
+        usedKey: resolvedReplayProtection ? keys.usedKey : undefined,
         candidateHashes,
         ttl: this.options.ttl,
         maxAttempts: this.options.maxAttempts,
         checkLock: this.shouldCheckVerifyLock(resolvedLockout),
         lockoutAfter: resolvedLockout?.afterAttempts,
         lockoutSeconds: resolvedLockout?.seconds,
+        replayProtectionTtl: resolvedReplayProtection?.ttl,
       });
 
       if (atomicResult === "verified") {
         await this.emitVerified(eventContext);
         return true;
+      }
+
+      if (atomicResult === "already_used") {
+        await this.emitFailed(eventContext, "already_used");
+        throw alreadyUsedError;
       }
 
       if (atomicResult === "expired") {
@@ -338,6 +352,15 @@ export class OTPManager {
       if (atomicResult === "invalid") {
         await this.emitFailed(eventContext, "invalid");
         throw invalidError;
+      }
+    }
+
+    if (resolvedReplayProtection) {
+      const usedMarker = await this.options.store.get(keys.usedKey);
+
+      if (usedMarker) {
+        await this.emitFailed(eventContext, "already_used");
+        throw alreadyUsedError;
       }
     }
 
@@ -372,6 +395,10 @@ export class OTPManager {
       throw invalidError;
     }
 
+    if (resolvedReplayProtection) {
+      await this.options.store.set(keys.usedKey, "1", resolvedReplayProtection.ttl);
+    }
+
     await this.options.store.del(keys.secretKey);
     await this.options.store.del(keys.attemptsKey);
     await this.emitVerified(eventContext);
@@ -393,6 +420,7 @@ export class OTPManager {
         rateLimitKey: buildTokenRateLimitKey(payload, rateScope),
         cooldownKey: buildTokenCooldownKey(payload, cooldownScope),
         lockKey: buildTokenLockKey(payload, lockScope),
+        usedKey: buildTokenUsedKey(payload, lockScope),
       };
     }
 
@@ -402,6 +430,7 @@ export class OTPManager {
       rateLimitKey: buildRateLimitKey(payload, rateScope),
       cooldownKey: buildCooldownKey(payload, cooldownScope),
       lockKey: buildLockKey(payload, lockScope),
+      usedKey: buildLockKey(payload, lockScope),
     };
   }
 
@@ -432,6 +461,18 @@ export class OTPManager {
       ...this.options.rateLimit,
       scope: this.options.rateLimit.scope ?? "channel",
       algorithm: this.options.rateLimit.algorithm ?? "fixed_window",
+    };
+  }
+
+  private getResolvedReplayProtection(): OTPReplayProtectionConfig | undefined {
+    if (!this.options.replayProtection?.enabled) {
+      return undefined;
+    }
+
+    return {
+      enabled: true,
+      ttl: this.options.replayProtection.ttl,
+      scope: this.options.replayProtection.scope ?? "intent_channel",
     };
   }
 
@@ -742,6 +783,20 @@ function validateManagerOptions(options: OTPManagerOptions): void {
     }
   }
 
+  if (options.replayProtection) {
+    if (typeof options.replayProtection.enabled !== "boolean") {
+      throw new TypeError("replayProtection.enabled must be a boolean.");
+    }
+
+    if (!Number.isInteger(options.replayProtection.ttl) || options.replayProtection.ttl <= 0) {
+      throw new TypeError("replayProtection.ttl must be a positive integer.");
+    }
+
+    if (options.replayProtection.scope && !isValidScope(options.replayProtection.scope)) {
+      throw new TypeError("replayProtection.scope must be a supported throttle scope.");
+    }
+  }
+
   if (options.hashing) {
     if (options.hashing.secret !== undefined && !options.hashing.secret.trim()) {
       throw new TypeError("hashing.secret must be a non-empty string when provided.");
@@ -817,3 +872,11 @@ function validatePayload(
 function isValidScope(scope: string): scope is OTPThrottleScope {
   return ["identifier", "intent", "channel", "intent_channel"].includes(scope);
 }
+
+
+
+
+
+
+
+
