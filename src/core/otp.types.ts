@@ -191,6 +191,37 @@ export interface BuildTokenDeliveryPayloadOptions extends BuildVerificationLinkO
   metadata?: OTPMetadata;
 }
 
+export type OTPVerificationOutcome =
+  | "verified"
+  | "expired"
+  | "already_used"
+  | "invalid"
+  | "locked"
+  | "rate_limited"
+  | "max_attempts"
+  | "cooldown_blocked"
+  | "unknown";
+
+export interface OTPClassifiedVerificationError {
+  kind: Exclude<OTPVerificationOutcome, "verified">;
+  code?: string;
+  errorName?: string;
+  retryable: boolean;
+}
+
+export interface VerificationResultParamNames {
+  outcome?: string;
+  code?: string;
+}
+
+export interface BuildVerificationResultLinkOptions {
+  baseUrl: string;
+  outcome: OTPVerificationOutcome;
+  code?: string;
+  paramNames?: VerificationResultParamNames;
+  extraParams?: Record<string, string | number | boolean | null | undefined>;
+}
+
 export interface OTPManagerOptions {
   store: StoreAdapter;
   ttl: number;

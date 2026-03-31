@@ -6,17 +6,24 @@ export {
   buildTokenDeliveryPayload,
   buildVerificationLink,
 } from "./utils/link-builder.js";
+export {
+  buildVerificationResultLink,
+  classifyVerificationError,
+  getVerificationOutcome,
+} from "./utils/verification-helpers.js";
 
 export type {
   BuildOtpDeliveryPayloadOptions,
   BuildTokenDeliveryPayloadOptions,
   BuildVerificationLinkOptions,
+  BuildVerificationResultLinkOptions,
   GenerateOTPInput,
   GenerateOTPResult,
   GenerateTokenInput,
   GenerateTokenResult,
   OTPAuditAdapter,
   OTPAuditEvent,
+  OTPClassifiedVerificationError,
   OTPCredentialKind,
   OTPDeliveryAdapter,
   OTPDeliveryRequest,
@@ -41,10 +48,12 @@ export type {
   OTPReplayProtectionConfig,
   OTPThrottleScope,
   OTPTokenLinkOptions,
+  OTPVerificationOutcome,
   OTPVerifiedEvent,
   RateLimitConfig,
   StoreAdapter,
   VerificationLinkParamNames,
+  VerificationResultParamNames,
   VerifyOTPInput,
   VerifyTokenInput,
 } from "./core/otp.types.js";

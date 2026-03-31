@@ -301,14 +301,6 @@ const replayAwareOtp = new OTPManager({
 
 ## Post-1.0.0 Roadmap
 
-- Delivery helpers for email links and magic-link style verification
-- Additional audit and delivery adapters
+- Framework-specific callback and redirect examples
+- Provider-specific companion packages and adapters
 - Richer token and verification-link workflow helpers
-
-
-
-
-
-
-
-
