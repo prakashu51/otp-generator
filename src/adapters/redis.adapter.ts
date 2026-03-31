@@ -32,16 +32,24 @@ export interface AtomicVerifyParams {
   otpKey: string;
   attemptsKey: string;
   lockKey: string;
+  usedKey?: string;
   candidateHashes: string[];
   ttl: number;
   maxAttempts: number;
   checkLock?: boolean;
   lockoutSeconds?: number;
   lockoutAfter?: number;
+  replayProtectionTtl?: number;
 }
 
 export type AtomicGenerateResult = "ok" | "rate_limit" | "cooldown" | "locked";
-export type AtomicVerifyResult = "verified" | "expired" | "invalid" | "max_attempts" | "locked";
+export type AtomicVerifyResult =
+  | "verified"
+  | "expired"
+  | "invalid"
+  | "max_attempts"
+  | "locked"
+  | "already_used";
 
 const ATOMIC_GENERATE_SCRIPT = `
 if ARGV[6] == '1' then
@@ -98,24 +106,34 @@ if ARGV[1] == '1' then
   end
 end
 
+if ARGV[2] ~= '' and KEYS[4] ~= '' then
+  local usedMarker = redis.call('GET', KEYS[4])
+  if usedMarker then
+    return 'already_used'
+  end
+end
+
 local storedHash = redis.call('GET', KEYS[1])
 if not storedHash then
   return 'expired'
 end
 
-local candidateCount = tonumber(ARGV[2])
+local candidateCount = tonumber(ARGV[3])
 for index = 1, candidateCount do
-  if storedHash == ARGV[index + 2] then
+  if storedHash == ARGV[index + 3] then
+    if ARGV[2] ~= '' and KEYS[4] ~= '' then
+      redis.call('SET', KEYS[4], '1', 'EX', tonumber(ARGV[2]))
+    end
     redis.call('DEL', KEYS[1])
     redis.call('DEL', KEYS[2])
     return 'verified'
   end
 end
 
-local ttlIndex = candidateCount + 3
-local maxAttemptsIndex = candidateCount + 4
-local lockoutSecondsIndex = candidateCount + 5
-local lockoutAfterIndex = candidateCount + 6
+local ttlIndex = candidateCount + 4
+local maxAttemptsIndex = candidateCount + 5
+local lockoutSecondsIndex = candidateCount + 6
+local lockoutAfterIndex = candidateCount + 7
 local attempts = redis.call('INCR', KEYS[2])
 if attempts == 1 then
   redis.call('EXPIRE', KEYS[2], tonumber(ARGV[ttlIndex]))
@@ -210,9 +228,10 @@ export class RedisAdapter implements StoreAdapter {
     }
 
     const result = await this.client.eval(ATOMIC_VERIFY_SCRIPT, {
-      keys: [params.otpKey, params.attemptsKey, params.lockKey],
+      keys: [params.otpKey, params.attemptsKey, params.lockKey, params.usedKey ?? ""],
       arguments: [
         params.checkLock ? "1" : "0",
+        params.replayProtectionTtl ? String(params.replayProtectionTtl) : "",
         String(params.candidateHashes.length),
         ...params.candidateHashes,
         String(params.ttl),
@@ -227,7 +246,8 @@ export class RedisAdapter implements StoreAdapter {
       result === "expired" ||
       result === "invalid" ||
       result === "max_attempts" ||
-      result === "locked"
+      result === "locked" ||
+      result === "already_used"
     ) {
       return result;
     }

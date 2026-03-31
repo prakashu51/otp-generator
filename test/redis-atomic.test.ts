@@ -8,6 +8,7 @@ import {
   OTPRateLimitExceededError,
   OTPResendCooldownError,
   RedisAdapter,
+  VerificationSecretAlreadyUsedError,
 } from "../src/index.js";
 
 interface RecordValue {
@@ -48,7 +49,7 @@ class FakeRedisClient {
       return this.atomicGenerate(options);
     }
 
-    if (options.keys.length === 3) {
+    if (options.keys.length === 3 || options.keys.length === 4) {
       return this.atomicVerify(options);
     }
 
@@ -101,18 +102,23 @@ class FakeRedisClient {
   }
 
   private atomicVerify(options: { keys: string[]; arguments: string[] }): string {
-    const [otpKey, attemptsKey, lockKey] = options.keys;
+    const [otpKey, attemptsKey, lockKey, usedKey] = options.keys;
     const checkLock = options.arguments[0];
-    const candidateCount = Number(options.arguments[1]);
-    const candidateHashes = options.arguments.slice(2, candidateCount + 2);
-    const ttl = Number(options.arguments[candidateCount + 2]);
-    const maxAttempts = Number(options.arguments[candidateCount + 3]);
-    const lockoutSeconds = options.arguments[candidateCount + 4];
-    const lockoutAfter = options.arguments[candidateCount + 5];
+    const replayProtectionTtl = options.arguments[1];
+    const candidateCount = Number(options.arguments[2]);
+    const candidateHashes = options.arguments.slice(3, candidateCount + 3);
+    const ttl = Number(options.arguments[candidateCount + 3]);
+    const maxAttempts = Number(options.arguments[candidateCount + 4]);
+    const lockoutSeconds = options.arguments[candidateCount + 5];
+    const lockoutAfter = options.arguments[candidateCount + 6];
     const storedHash = this.getSync(otpKey);
 
     if (checkLock === "1" && this.getSync(lockKey)) {
       return "locked";
+    }
+
+    if (replayProtectionTtl && usedKey && this.getSync(usedKey)) {
+      return "already_used";
     }
 
     if (!storedHash) {
@@ -120,6 +126,9 @@ class FakeRedisClient {
     }
 
     if (candidateHashes.includes(storedHash)) {
+      if (replayProtectionTtl && usedKey) {
+        this.setSync(usedKey, "1", Number(replayProtectionTtl));
+      }
       this.storage.delete(otpKey);
       this.storage.delete(attemptsKey);
       return "verified";
@@ -431,4 +440,46 @@ test("redis atomic token verify prevents double-success race conditions", async 
 
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+});
+
+
+test("redis replay protection returns already-used after successful token verification", async () => {
+  const manager = new OTPManager({
+    store: new RedisAdapter(new FakeRedisClient()),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    hashing: {
+      secret: "current-secret",
+    },
+    replayProtection: {
+      enabled: true,
+      ttl: 120,
+    },
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  const first = await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+    token: generated.token as string,
+  });
+
+  assert.equal(first, true);
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+    VerificationSecretAlreadyUsedError,
+  );
 });

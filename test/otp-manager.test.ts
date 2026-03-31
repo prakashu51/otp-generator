@@ -10,6 +10,7 @@ import {
   OTPMaxAttemptsExceededError,
   OTPRateLimitExceededError,
   OTPResendCooldownError,
+  VerificationSecretAlreadyUsedError,
   VerificationSecretExpiredError,
   VerificationSecretInvalidError,
 } from "../src/index.js";
@@ -1245,4 +1246,122 @@ test("startup validation guards adapter shapes", () => {
       }),
     /deliveryAdapter.send must be a function/,
   );
+});
+
+
+test("replay protection is opt-in and preserves legacy token behavior by default", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  const first = await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+    token: generated.token as string,
+  });
+
+  assert.equal(first, true);
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+    VerificationSecretExpiredError,
+  );
+});
+
+test("replay protection returns already-used error when enabled for token flow", async () => {
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    replayProtection: {
+      enabled: true,
+      ttl: 120,
+    },
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  const first = await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+    token: generated.token as string,
+  });
+
+  assert.equal(first, true);
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+    VerificationSecretAlreadyUsedError,
+  );
+});
+
+test("replay protection emits already_used failure reason", async () => {
+  const failedEvents: Array<{ reason?: string }> = [];
+  const manager = new OTPManager({
+    store: new MemoryAdapter(),
+    ttl: 30,
+    maxAttempts: 3,
+    devMode: true,
+    replayProtection: {
+      enabled: true,
+      ttl: 120,
+    },
+    hooks: {
+      onFailed: async (event) => {
+        failedEvents.push(event);
+      },
+    },
+  });
+
+  const generated = await manager.generateToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+  });
+
+  await manager.verifyToken({
+    type: "email",
+    identifier: "user@example.com",
+    intent: "verify-email",
+    token: generated.token as string,
+  });
+
+  await assert.rejects(
+    manager.verifyToken({
+      type: "email",
+      identifier: "user@example.com",
+      intent: "verify-email",
+      token: generated.token as string,
+    }),
+    VerificationSecretAlreadyUsedError,
+  );
+
+  await flushHooks();
+  assert.equal(failedEvents.at(-1)?.reason, "already_used");
 });
