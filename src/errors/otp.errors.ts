@@ -56,3 +56,9 @@ export class VerificationSecretInvalidError extends OTPError {
   }
 }
 
+export class VerificationSecretAlreadyUsedError extends OTPError {
+  constructor(message = "Verification secret has already been used.") {
+    super(message, "VERIFICATION_SECRET_ALREADY_USED");
+  }
+}
+

@@ -142,6 +142,7 @@ type OTPManagerOptions = {
 - `lockout.appliesTo` defaults to `both`.
 - `lockout.scope` defaults to `intent_channel`.
 - `hooks.throwOnError` defaults to non-blocking behavior unless explicitly set to `true`.
+- `replayProtection` is opt-in and only affects token verification flow.
 
 ## Stable API
 

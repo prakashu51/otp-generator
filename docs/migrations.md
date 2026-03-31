@@ -49,3 +49,9 @@
 - optional `auditAdapter` and `deliveryAdapter` support was added.
 - `generateAndSend()` and `generateTokenAndSend()` were added as explicit send helpers.
 - existing `generate()`, `verify()`, `generateToken()`, and `verifyToken()` behavior remains unchanged.
+
+
+## 1.4.x to 1.5.0
+- optional `replayProtection` was added for token verification flows.
+- when enabled, repeated verification of a successfully used token can now return `VerificationSecretAlreadyUsedError`.
+- OTP flow and default token flow behavior remain unchanged when replay protection is not configured.
