@@ -1,6 +1,6 @@
 {
   "name": "redis-otp-manager",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Lightweight, Redis-backed OTP manager for Node.js apps",
   "repository": {
     "type": "git",
