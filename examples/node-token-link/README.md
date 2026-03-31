@@ -28,6 +28,10 @@ const otp = new OTPManager({
   hashing: {
     secret: process.env.OTP_HMAC_SECRET,
   },
+  replayProtection: {
+    enabled: true,
+    ttl: 3600,
+  },
 });
 
 const generated = await otp.generateToken({
@@ -75,3 +79,6 @@ if (result) {
 The helper utilities stay provider-agnostic:
 - `buildVerificationLink()` gives you a ready-to-send URL
 - `buildTokenDeliveryPayload()` gives you a small structured payload for your email template or delivery layer
+
+
+With `replayProtection` enabled, a repeated click on the same verification URL can return `VerificationSecretAlreadyUsedError` instead of the generic expired response.

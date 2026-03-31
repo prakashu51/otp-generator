@@ -77,6 +77,7 @@ await otp.verify({
 - Fixed-window and Redis sliding-window rate limiting
 - Scoped throttling by identifier, intent, channel, or intent + channel
 - Temporary lock windows after repeated failed verification attempts
+- Optional replay detection for already-used token verification links
 
 ### Observability
 - Lifecycle hooks for generated, verified, failed, locked, rate-limited, and cooldown-blocked events
@@ -126,6 +127,11 @@ type OTPManagerOptions = {
     previousSecrets?: string[];
     allowLegacyVerify?: boolean;
   };
+  replayProtection?: {
+    enabled: boolean;
+    ttl: number;
+    scope?: "identifier" | "intent" | "channel" | "intent_channel";
+  };
 };
 ```
 
@@ -166,6 +172,7 @@ The package can throw these errors:
 - `OTPInvalidError`
 - `VerificationSecretExpiredError`
 - `VerificationSecretInvalidError`
+- `VerificationSecretAlreadyUsedError`
 - `OTPMaxAttemptsExceededError`
 - `OTPResendCooldownError`
 - `OTPLockedError`
@@ -264,6 +271,8 @@ Use `generateToken()` and `verifyToken()` when you want email verification links
 
 Token verification returns token-friendly generic secret errors such as `VerificationSecretExpiredError` and `VerificationSecretInvalidError`, while the OTP flow keeps the original OTP error classes.
 
+If you enable `replayProtection`, successful token verification stores a short-lived used marker so repeated verification can return `VerificationSecretAlreadyUsedError` instead of the generic expired/nonexistent response.
+
 ```ts
 const generated = await otp.generateToken({
   type: "email",
@@ -276,6 +285,17 @@ await otp.verifyToken({
   identifier: "user@example.com",
   intent: "verify-email",
   token: generated.token ?? "",
+});
+
+const replayAwareOtp = new OTPManager({
+  store: new RedisAdapter(redisClient),
+  ttl: 1800,
+  maxAttempts: 3,
+  replayProtection: {
+    enabled: true,
+    ttl: 3600,
+    scope: "intent_channel",
+  },
 });
 ```
 

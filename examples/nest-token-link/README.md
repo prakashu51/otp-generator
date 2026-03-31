@@ -65,3 +65,6 @@ export class AuthController {
   }
 }
 ```
+
+
+If you initialize `OTPManager` with `replayProtection`, your callback route can distinguish an already-used verification link from an expired one and map those cases to different responses if needed.

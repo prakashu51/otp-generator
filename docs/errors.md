@@ -22,3 +22,15 @@ Thrown when a lock window is active or when verification triggers a lockout acco
 - `OTPExpiredError` after a successful verify is expected because OTPs are one-time use.
 - `OTPLockedError` is separate from `OTPMaxAttemptsExceededError` because lock windows can continue blocking future generate or verify calls for a time period.
 - for public APIs, map these package errors to your own HTTP or RPC error shape instead of leaking internal details directly.
+
+
+## VerificationSecretInvalidError
+Thrown when a verification token exists for the given scope but the provided token is incorrect and the attempt threshold has not yet been exhausted.
+
+
+## VerificationSecretExpiredError
+Thrown when there is no active verification token for the given scope. This usually means the token expired, was already consumed, or was removed after successful verification when replay protection is disabled.
+
+
+## VerificationSecretAlreadyUsedError
+Thrown when `replayProtection` is enabled for token flows and a previously verified token is submitted again while its replay marker is still active.
