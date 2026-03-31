@@ -14,6 +14,9 @@ import {
   RedisAdapter,
   buildTokenDeliveryPayload,
   buildVerificationLink,
+  buildVerificationResultLink,
+  classifyVerificationError,
+  getVerificationOutcome,
 } from "redis-otp-manager";
 import { createClient } from "redis";
 
@@ -82,3 +85,30 @@ The helper utilities stay provider-agnostic:
 
 
 With `replayProtection` enabled, a repeated click on the same verification URL can return `VerificationSecretAlreadyUsedError` instead of the generic expired response.
+## Optional callback result handling
+
+```ts
+try {
+  await otp.verifyToken({
+    type: "email",
+    identifier: req.query.identifier as string,
+    intent: "verify-email",
+    token: req.query.token as string,
+  });
+
+  const successLink = buildVerificationResultLink({
+    baseUrl: "https://your-app.com/verify-email/result",
+    outcome: getVerificationOutcome({ verified: true }),
+  });
+
+  res.redirect(successLink);
+} catch (error) {
+  const failureLink = buildVerificationResultLink({
+    baseUrl: "https://your-app.com/verify-email/result",
+    outcome: getVerificationOutcome({ error }),
+    code: classifyVerificationError(error).code,
+  });
+
+  res.redirect(failureLink);
+}
+```

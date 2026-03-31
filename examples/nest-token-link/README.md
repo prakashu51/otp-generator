@@ -6,7 +6,12 @@ This example shows a simple NestJS-style flow for email verification links.
 
 ```ts
 import { Injectable } from "@nestjs/common";
-import { OTPManager, buildVerificationLink } from "redis-otp-manager";
+import {
+  OTPManager,
+  buildVerificationLink,
+  buildVerificationResultLink,
+  getVerificationOutcome,
+} from "redis-otp-manager";
 
 @Injectable()
 export class EmailVerificationService {
@@ -61,10 +66,17 @@ export class AuthController {
   ) {
     await this.emailVerification.verifyEmail(token, identifier);
 
-    return { verified: true };
+    return {
+      verified: true,
+      redirect: buildVerificationResultLink({
+        baseUrl: "https://app.example.com/verify-email/result",
+        outcome: getVerificationOutcome({ verified: true }),
+      }),
+    };
   }
 }
 ```
 
 
 If you initialize `OTPManager` with `replayProtection`, your callback route can distinguish an already-used verification link from an expired one and map those cases to different responses if needed.
+

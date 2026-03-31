@@ -55,3 +55,10 @@
 - optional `replayProtection` was added for token verification flows.
 - when enabled, repeated verification of a successfully used token can now return `VerificationSecretAlreadyUsedError`.
 - OTP flow and default token flow behavior remain unchanged when replay protection is not configured.
+
+## 1.5.x to 1.6.0
+- classifyVerificationError() was added to map package errors into stable verification helper kinds.
+- getVerificationOutcome() was added for app-side success and failure outcome handling.
+- uildVerificationResultLink() was added for redirect-friendly verification callback flows.
+- existing OTP and token generation and verification APIs remain unchanged.
+
